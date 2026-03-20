@@ -19,13 +19,13 @@ cd AI-star-be
 #### Mac / Linux 
 ```bash
 ./gradlew clean build
-java -jar build/libs/*.jar
+java -jar build/libs/ai-star-server.jar
 ```
 
 #### Windows
 ```bash
 gradlew clean build
-java -jar build/libs/[실제파일명].jar
+java -jar build/libs/ai-star-server.jar
 ```
 
 
