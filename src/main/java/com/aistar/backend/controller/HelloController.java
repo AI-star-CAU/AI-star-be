@@ -17,7 +17,7 @@ public class HelloController {
     @ResponseBody
     public String health()
     {
-        return "Ai-star server OK";
+        return "Ai-star server is now running";
     }
 
     @GetMapping("/hello")
