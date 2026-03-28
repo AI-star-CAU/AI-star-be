@@ -23,7 +23,7 @@ jobs:
             cd /home/ubuntu/AI-star-be
             rm -rf src/main/resources/application.yml
             git pull origin main
-            echo "&APPLICATION_PROPERTIES" > src/main/resources/application.yml
+            echo "$APPLICATION_PROPERTIES" > src/main/resources/application.yml
             ./gradlew clean build
             sudo fuser -k -n tcp 8080 || true
             nohup java -jar build/libs/ai-star-server.jar > ./output.log 2>&1 &
