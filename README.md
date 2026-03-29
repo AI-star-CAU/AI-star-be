@@ -1,6 +1,9 @@
 # AI-star-be
 AI-star Backend: SW Engineering Project
 
+## 배포 URL
+- https://api-aistar.kro.kr/
+
 ## 실행 환경
 - **Language:** Java 21
 - **Build Tool:** Gradle
@@ -38,4 +41,3 @@ java -jar build/libs/ai-star-server.jar
 - http://localhost:8080/hello
 
 - 3가지 기본 테스트용 엔드포인트 (method: GET)
-
