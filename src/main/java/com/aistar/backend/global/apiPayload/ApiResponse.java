@@ -1,7 +1,7 @@
-package com.aistar.backend.global.api;
+package com.aistar.backend.global.apiPayload;
 
-import com.aistar.backend.global.error.BaseErrorCode;
-import com.aistar.backend.global.error.BaseSuccessCode;
+import com.aistar.backend.global.apiPayload.code.BaseErrorCode;
+import com.aistar.backend.global.apiPayload.code.BaseSuccessCode;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.annotation.JsonPropertyOrder;
 import lombok.AllArgsConstructor;

@@ -1,4 +1,4 @@
-package com.aistar.backend.global.error;
+package com.aistar.backend.global.apiPayload.code;
 
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;

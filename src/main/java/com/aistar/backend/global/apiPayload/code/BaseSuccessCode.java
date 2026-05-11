@@ -1,4 +1,4 @@
-package com.aistar.backend.global.error;
+package com.aistar.backend.global.apiPayload.code;
 
 import org.springframework.http.HttpStatus;
 
