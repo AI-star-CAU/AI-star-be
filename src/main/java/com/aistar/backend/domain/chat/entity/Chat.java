@@ -24,7 +24,7 @@ public class Chat extends BaseEntity {
     @Column(name = "aichat_session_id")
     private Long id;
 
-    @Column(name = "root_chat_id", nullable = false)
+    @Column(name = "root_chat_id")
     private Long rootChatId;
 
     @Column(name = "title", nullable = false, columnDefinition = "TEXT")
