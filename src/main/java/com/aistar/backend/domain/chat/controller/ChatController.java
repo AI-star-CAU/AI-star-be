@@ -2,7 +2,10 @@ package com.aistar.backend.domain.chat.controller;
 
 import com.aistar.backend.domain.chat.dto.ChatReqDto;
 import com.aistar.backend.domain.chat.dto.ChatResDto;
+import com.aistar.backend.domain.chat.dto.TurnResDto;
+import com.aistar.backend.domain.chat.enums.CursorDirection;
 import com.aistar.backend.domain.chat.service.ChatService;
+import com.aistar.backend.domain.chat.service.TurnService;
 import com.aistar.backend.global.apiPayload.ApiResponse;
 import com.aistar.backend.global.apiPayload.code.SuccessStatus;
 import com.aistar.backend.global.security.CustomUserDetails;
@@ -23,6 +26,7 @@ import org.springframework.web.bind.annotation.*;
 public class ChatController {
 
     private final ChatService chatService;
+    private final TurnService turnService;
 
     @Operation(summary = "새 대화 시작")
     @PostMapping
@@ -54,6 +58,21 @@ public class ChatController {
     ) {
         return ApiResponse.onSuccess(SuccessStatus.OK,
                 chatService.getChatDetail(userDetails.getMember().getId(), chatId));
+    }
+
+    @Operation(summary = "대화 턴 목록 조회 (Cursor 기반)")
+    @GetMapping("/{chatId}/turns")
+    public ApiResponse<TurnResDto.TurnPage> getTurns(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable Long chatId,
+            @RequestParam(required = false) Integer lastTurnSequence,
+            @RequestParam(defaultValue = "20") int limit,
+            @RequestParam(defaultValue = "BACKWARD") CursorDirection direction
+    ) {
+        limit = Math.max(1, Math.min(limit, 50));
+        return ApiResponse.onSuccess(SuccessStatus.OK,
+                turnService.getTurns(userDetails.getMember().getId(), chatId,
+                        lastTurnSequence, limit, direction));
     }
 
     @Operation(summary = "대화 삭제")
