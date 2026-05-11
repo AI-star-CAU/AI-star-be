@@ -20,6 +20,8 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Service
@@ -32,11 +34,11 @@ public class MessageService {
     private final LlmClient llmClient;
     private final ObjectMapper objectMapper;
 
-    private static final long SSE_TIMEOUT = 60_000L * 5; // 5분
+    private static final long SSE_TIMEOUT = 60_000L * 5;
 
-    /**
-     * 스트리밍 시작 전 검증 (Controller에서 호출, 트랜잭션 내)
-     */
+    // 스트리밍 중인 메시지 ID → cancel 플래그
+    private final Map<Long, Boolean> cancelFlags = new ConcurrentHashMap<>();
+
     @Transactional(readOnly = true)
     public Chat validateAndGetChat(Long memberId, Long chatId) {
         Chat chat = chatRepository.findByIdAndDeletedAtIsNull(chatId)
@@ -48,15 +50,11 @@ public class MessageService {
         return chat;
     }
 
-    /**
-     * Turn + Messages 생성 (트랜잭션 내)
-     */
     @Transactional
     public TurnContext createTurnAndMessages(Long chatId, String userContent) {
         Chat chat = chatRepository.findByIdAndDeletedAtIsNull(chatId)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
 
-        // 다음 turnSequence 계산
         int nextSequence = turnRepository.findTopByChatIdOrderByTurnSequenceDesc(chatId)
                 .map(t -> t.getTurnSequence() + 1)
                 .orElse(1);
@@ -67,7 +65,6 @@ public class MessageService {
                 .build();
         turnRepository.save(turn);
 
-        // USER 메시지 (COMPLETED)
         Message userMessage = Message.builder()
                 .turn(turn)
                 .senderType(SenderType.USER)
@@ -76,7 +73,6 @@ public class MessageService {
                 .build();
         messageRepository.save(userMessage);
 
-        // AI 메시지 (STREAMING)
         Message aiMessage = Message.builder()
                 .turn(turn)
                 .senderType(SenderType.AI)
@@ -87,33 +83,36 @@ public class MessageService {
         return new TurnContext(chat, turn, userMessage, aiMessage);
     }
 
-    /**
-     * SSE 스트리밍 실행 (비동기, 트랜잭션 밖에서 호출)
-     */
     public SseEmitter streamMessage(TurnContext ctx) {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT);
+        Long aiMessageId = ctx.aiMessage().getId();
+
+        cancelFlags.put(aiMessageId, false);
 
         Thread.startVirtualThread(() -> {
+            StringBuilder contentBuilder = new StringBuilder();
             try {
                 // 1. turn_started
                 sendEvent(emitter, "turn_started", MessageResDto.TurnStarted.builder()
                         .turnId(ctx.turn().getId())
                         .userMessageId(ctx.userMessage().getId())
-                        .aiMessageId(ctx.aiMessage().getId())
+                        .aiMessageId(aiMessageId)
                         .build());
 
-                // 2. LLM 스트리밍 → chunk 이벤트
-                StringBuilder contentBuilder = new StringBuilder();
+                // 2. LLM 스트리밍
 
                 llmClient.streamCompletion(
                         ctx.chat().getLlmModel().getModelId(),
                         ctx.userMessage().getContent(),
                         chunk -> {
+                            // cancel 체크
+                            if (Boolean.TRUE.equals(cancelFlags.get(aiMessageId))) {
+                                throw new CancelException();
+                            }
                             contentBuilder.append(chunk);
                             try {
                                 sendEvent(emitter, "chunk", MessageResDto.Chunk.builder()
-                                        .text(chunk)
-                                        .build());
+                                        .text(chunk).build());
                             } catch (IOException e) {
                                 throw new RuntimeException(e);
                             }
@@ -123,27 +122,34 @@ public class MessageService {
                 // 3. 완료 처리
                 String fullContent = contentBuilder.toString();
                 String summary = fullContent.length() > 50
-                        ? fullContent.substring(0, 50)
-                        : fullContent;
-                int answerToken = fullContent.split("\\s+").length; // 간이 토큰 계산
+                        ? fullContent.substring(0, 50) : fullContent;
+                int answerToken = fullContent.split("\\s+").length;
 
-                completeAiMessage(ctx.aiMessage().getId(), fullContent, answerToken);
+                completeAiMessage(aiMessageId, fullContent, answerToken);
                 updateTurnSummary(ctx.turn().getId(), summary);
                 updateChatTimestamp(ctx.chat().getId());
 
-                // 4. turn_completed
                 sendEvent(emitter, "turn_completed", MessageResDto.TurnCompleted.builder()
-                        .aiMessageId(ctx.aiMessage().getId())
+                        .aiMessageId(aiMessageId)
                         .summary(summary)
                         .answerToken(answerToken)
                         .build());
 
                 emitter.complete();
 
+            } catch (CancelException e) {
+                // cancel API에서 이미 DB 처리했으므로 SSE만 종료
+                String partialContent = contentBuilder.toString();
+                if (!partialContent.isEmpty()) {
+                    savePartialContent(aiMessageId, partialContent);
+                }
+                updateChatTimestamp(ctx.chat().getId());
+                emitter.complete();
+
             } catch (Exception e) {
                 log.error("SSE 스트리밍 실패", e);
                 try {
-                    failAiMessage(ctx.aiMessage().getId());
+                    failAiMessage(aiMessageId);
                     updateChatTimestamp(ctx.chat().getId());
                     sendEvent(emitter, "error", MessageResDto.SseError.builder()
                             .code(ErrorStatus.LLM_CALL_FAILED.getCode())
@@ -152,18 +158,76 @@ public class MessageService {
                 } catch (IOException ignored) {
                 }
                 emitter.completeWithError(e);
+            } finally {
+                cancelFlags.remove(aiMessageId);
             }
         });
 
         return emitter;
     }
 
+    // ── Cancel ──
+
+    @Transactional
+    public MessageResDto.CancelResult cancelMessage(Long memberId, Long chatId, Long messageId) {
+        // 1. chat 소유권
+        Chat chat = chatRepository.findByIdAndDeletedAtIsNull(chatId)
+                .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
+        if (!chat.getMember().getId().equals(memberId)) {
+            throw new ProjectException(ErrorStatus.FORBIDDEN);
+        }
+
+        // 2. 메시지 존재 + chatId 소속 확인
+        Message message = messageRepository.findById(messageId)
+                .orElseThrow(() -> new ProjectException(ErrorStatus.MESSAGE_NOT_FOUND));
+        if (!message.getTurn().getChat().getId().equals(chatId)) {
+            throw new ProjectException(ErrorStatus.MESSAGE_NOT_FOUND);
+        }
+
+        // 3. 상태 전이
+        switch (message.getStatus()) {
+            case STREAMING -> {
+                message.updateStatus(MessageStatus.CANCELED);
+                // 스트리밍 스레드에 cancel 시그널
+                cancelFlags.put(messageId, true);
+            }
+            case CANCELED -> {
+                // idempotent
+            }
+            case COMPLETED, FAILED -> {
+                throw new ProjectException(ErrorStatus.MESSAGE_CANCEL_NOT_ALLOWED);
+            }
+        }
+
+        chat.touchUpdatedAt();
+
+        return MessageResDto.CancelResult.builder()
+                .messageId(message.getId())
+                .status(message.getStatus())
+                .content(message.getContent())
+                .answerToken(message.getAnswerToken())
+                .build();
+    }
+
+    // ── 내부 메서드 ──
+
     @Transactional
     public void completeAiMessage(Long messageId, String content, int answerToken) {
         Message message = messageRepository.findById(messageId).orElseThrow();
-        message.updateContent(content);
-        message.updateStatus(MessageStatus.COMPLETED);
-        message.updateAnswerToken(answerToken);
+        // cancel된 경우 덮어쓰지 않음
+        if (message.getStatus() == MessageStatus.STREAMING) {
+            message.updateContent(content);
+            message.updateStatus(MessageStatus.COMPLETED);
+            message.updateAnswerToken(answerToken);
+        }
+    }
+
+    @Transactional
+    public void savePartialContent(Long messageId, String partialContent) {
+        Message message = messageRepository.findById(messageId).orElseThrow();
+        message.updateContent(partialContent);
+        int partialToken = partialContent.split("\\s+").length;
+        message.updateAnswerToken(partialToken);
     }
 
     @Transactional
@@ -191,4 +255,7 @@ public class MessageService {
     }
 
     public record TurnContext(Chat chat, Turn turn, Message userMessage, Message aiMessage) {}
+
+    // 스트리밍 스레드 내부에서 cancel 감지용
+    private static class CancelException extends RuntimeException {}
 }

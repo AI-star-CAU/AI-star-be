@@ -1,7 +1,10 @@
 package com.aistar.backend.domain.chat.controller;
 
 import com.aistar.backend.domain.chat.dto.MessageReqDto;
+import com.aistar.backend.domain.chat.dto.MessageResDto;
 import com.aistar.backend.domain.chat.service.MessageService;
+import com.aistar.backend.global.apiPayload.ApiResponse;
+import com.aistar.backend.global.apiPayload.code.SuccessStatus;
 import com.aistar.backend.global.security.CustomUserDetails;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -37,5 +40,17 @@ public class MessageController {
 
         // SSE 스트리밍 시작 (비동기)
         return messageService.streamMessage(ctx);
+    }
+
+    @Operation(summary = "메시지 스트리밍 취소")
+    @PostMapping("/{messageId}/cancel")
+    public ApiResponse<MessageResDto.CancelResult> cancelMessage(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable Long chatId,
+            @PathVariable Long messageId
+    ) {
+        Long memberId = userDetails.getMember().getId();
+        MessageResDto.CancelResult result = messageService.cancelMessage(memberId, chatId, messageId);
+        return ApiResponse.onSuccess(SuccessStatus.OK, result);
     }
 }
