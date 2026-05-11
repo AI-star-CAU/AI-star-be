@@ -66,4 +66,8 @@ public class Chat extends BaseEntity {
     public void softDelete() {
         this.deletedAt = LocalDateTime.now();
     }
+
+    public void touchUpdatedAt() {
+        setUpdatedAt(LocalDateTime.now());
+    }
 }

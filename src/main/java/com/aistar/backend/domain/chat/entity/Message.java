@@ -50,12 +50,8 @@ public class Message {
         this.status = status;
     }
 
-    public void appendContent(String chunk) {
-        if (this.content == null) {
-            this.content = chunk;
-        } else {
-            this.content += chunk;
-        }
+    public void updateContent(String content) {
+        this.content = content;
     }
 
     public void updateAnswerToken(Integer answerToken) {
