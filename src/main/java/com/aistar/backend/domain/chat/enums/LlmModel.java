@@ -1,5 +1,7 @@
 package com.aistar.backend.domain.chat.enums;
 
+import com.fasterxml.jackson.annotation.JsonCreator;
+import com.fasterxml.jackson.annotation.JsonValue;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
@@ -14,4 +16,19 @@ public enum LlmModel {
 
     private final String modelId;
     private final LlmProvider provider;
+
+    @JsonValue
+    public String getModelId() {
+        return modelId;
+    }
+
+    @JsonCreator
+    public static LlmModel fromModelId(String modelId) {
+        for (LlmModel model : values()) {
+            if (model.modelId.equals(modelId)) {
+                return model;
+            }
+        }
+        throw new IllegalArgumentException("Unknown model: " + modelId);
+    }
 }

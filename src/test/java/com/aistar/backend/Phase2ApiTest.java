@@ -168,12 +168,12 @@ class Phase2ApiTest {
                         .header("Authorization", "Bearer " + tokenFor(member))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"title":"새 대화","llmProvider":"OPENAI","llmModel":"GPT_4O_MINI"}
+                                {"title":"새 대화","llmProvider":"OPENAI","llmModel":"gpt-4o-mini"}
                                 """))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.isSuccess").value(true))
                 .andExpect(jsonPath("$.result.title").value("새 대화"))
-                .andExpect(jsonPath("$.result.llmModel").value("GPT_4O_MINI"));
+                .andExpect(jsonPath("$.result.llmModel").value("gpt-4o-mini"));
     }
 
     @Test
