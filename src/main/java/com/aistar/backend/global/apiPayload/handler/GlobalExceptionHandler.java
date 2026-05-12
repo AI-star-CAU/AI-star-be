@@ -9,6 +9,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -29,10 +30,18 @@ public class GlobalExceptionHandler {
                 .body(ApiResponse.onFailure(code, null));
     }
 
-    // JSON 파싱 실패 / enum 변환 실패 등
+    // JSON 파싱 실패 / request body enum 변환 실패 등
     @ExceptionHandler(HttpMessageNotReadableException.class)
     public ResponseEntity<ApiResponse<Void>> handleNotReadable(HttpMessageNotReadableException e) {
         BaseErrorCode code = ErrorStatus.BAD_REQUEST;
+        return ResponseEntity.status(code.getStatus())
+                .body(ApiResponse.onFailure(code, null));
+    }
+
+    // @RequestParam enum 변환 실패 (예: direction=INVALID)
+    @ExceptionHandler(MethodArgumentTypeMismatchException.class)
+    public ResponseEntity<ApiResponse<Void>> handleTypeMismatch(MethodArgumentTypeMismatchException e) {
+        BaseErrorCode code = ErrorStatus.INVALID_INPUT;
         return ResponseEntity.status(code.getStatus())
                 .body(ApiResponse.onFailure(code, null));
     }

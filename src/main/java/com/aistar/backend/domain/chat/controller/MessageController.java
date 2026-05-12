@@ -32,11 +32,8 @@ public class MessageController {
     ) {
         Long memberId = userDetails.getMember().getId();
 
-        // 스트리밍 시작 전 검증 (실패 시 ProjectException → ApiResponse 에러)
-        messageService.validateAndGetChat(memberId, chatId);
-
-        // Turn + Messages 생성
-        MessageService.TurnContext ctx = messageService.createTurnAndMessages(chatId, dto.content());
+        // Turn + Messages 생성 (소유권 검증 포함)
+        MessageService.TurnContext ctx = messageService.createTurnAndMessages(memberId, chatId, dto.content());
 
         // SSE 스트리밍 시작 (비동기)
         return messageService.streamMessage(ctx);

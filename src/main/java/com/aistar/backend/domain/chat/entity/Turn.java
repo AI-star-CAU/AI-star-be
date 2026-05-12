@@ -36,6 +36,7 @@ public class Turn {
     private Chat chat;
 
     @OneToMany(mappedBy = "turn")
+    @OrderBy("id ASC")
     @Builder.Default
     private List<Message> messages = new ArrayList<>();
 

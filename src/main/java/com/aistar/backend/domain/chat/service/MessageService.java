@@ -17,11 +17,13 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 @Service
@@ -33,27 +35,31 @@ public class MessageService {
     private final MessageRepository messageRepository;
     private final LlmClient llmClient;
     private final ObjectMapper objectMapper;
+    private final TransactionTemplate transactionTemplate;
 
     private static final long SSE_TIMEOUT = 60_000L * 5;
 
-    // 스트리밍 중인 메시지 ID → cancel 플래그
-    private final Map<Long, Boolean> cancelFlags = new ConcurrentHashMap<>();
+    // 스트리밍 중인 메시지 ID → 스트리밍 컨텍스트
+    private final Map<Long, StreamingContext> streamingContexts = new ConcurrentHashMap<>();
 
-    @Transactional(readOnly = true)
-    public Chat validateAndGetChat(Long memberId, Long chatId) {
+    // ── 스트리밍 컨텍스트 (cancel 경합 해결) ──
+
+    record StreamingContext(AtomicBoolean canceled, StringBuffer contentBuffer) {
+        static StreamingContext create() {
+            return new StreamingContext(new AtomicBoolean(false), new StringBuffer());
+        }
+    }
+
+    // ── Turn + Message 생성 (소유권 검증 포함) ──
+
+    @Transactional
+    public TurnContext createTurnAndMessages(Long memberId, Long chatId, String userContent) {
         Chat chat = chatRepository.findByIdAndDeletedAtIsNull(chatId)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
 
         if (!chat.getMember().getId().equals(memberId)) {
             throw new ProjectException(ErrorStatus.FORBIDDEN);
         }
-        return chat;
-    }
-
-    @Transactional
-    public TurnContext createTurnAndMessages(Long chatId, String userContent) {
-        Chat chat = chatRepository.findByIdAndDeletedAtIsNull(chatId)
-                .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
 
         int nextSequence = turnRepository.findTopByChatIdOrderByTurnSequenceDesc(chatId)
                 .map(t -> t.getTurnSequence() + 1)
@@ -83,14 +89,16 @@ public class MessageService {
         return new TurnContext(chat, turn, userMessage, aiMessage);
     }
 
+    // ── SSE 스트리밍 ──
+
     public SseEmitter streamMessage(TurnContext ctx) {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT);
         Long aiMessageId = ctx.aiMessage().getId();
 
-        cancelFlags.put(aiMessageId, false);
+        StreamingContext streamCtx = StreamingContext.create();
+        streamingContexts.put(aiMessageId, streamCtx);
 
         Thread.startVirtualThread(() -> {
-            StringBuilder contentBuilder = new StringBuilder();
             try {
                 // 1. turn_started
                 sendEvent(emitter, "turn_started", MessageResDto.TurnStarted.builder()
@@ -100,16 +108,14 @@ public class MessageService {
                         .build());
 
                 // 2. LLM 스트리밍
-
                 llmClient.streamCompletion(
                         ctx.chat().getLlmModel().getModelId(),
                         ctx.userMessage().getContent(),
                         chunk -> {
-                            // cancel 체크
-                            if (Boolean.TRUE.equals(cancelFlags.get(aiMessageId))) {
+                            if (streamCtx.canceled().get()) {
                                 throw new CancelException();
                             }
-                            contentBuilder.append(chunk);
+                            streamCtx.contentBuffer().append(chunk);
                             try {
                                 sendEvent(emitter, "chunk", MessageResDto.Chunk.builder()
                                         .text(chunk).build());
@@ -120,14 +126,23 @@ public class MessageService {
                 );
 
                 // 3. 완료 처리
-                String fullContent = contentBuilder.toString();
+                String fullContent = streamCtx.contentBuffer().toString();
                 String summary = fullContent.length() > 50
                         ? fullContent.substring(0, 50) : fullContent;
                 int answerToken = fullContent.split("\\s+").length;
 
-                completeAiMessage(aiMessageId, fullContent, answerToken);
-                updateTurnSummary(ctx.turn().getId(), summary);
-                updateChatTimestamp(ctx.chat().getId());
+                transactionTemplate.executeWithoutResult(status -> {
+                    Message message = messageRepository.findById(aiMessageId).orElseThrow();
+                    if (message.getStatus() == MessageStatus.STREAMING) {
+                        message.updateContent(fullContent);
+                        message.updateStatus(MessageStatus.COMPLETED);
+                        message.updateAnswerToken(answerToken);
+                    }
+                    Turn turn = turnRepository.findById(ctx.turn().getId()).orElseThrow();
+                    turn.updateSummary(summary);
+                    Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
+                    chat.touchUpdatedAt();
+                });
 
                 sendEvent(emitter, "turn_completed", MessageResDto.TurnCompleted.builder()
                         .aiMessageId(aiMessageId)
@@ -138,19 +153,22 @@ public class MessageService {
                 emitter.complete();
 
             } catch (CancelException e) {
-                // cancel API에서 이미 DB 처리했으므로 SSE만 종료
-                String partialContent = contentBuilder.toString();
-                if (!partialContent.isEmpty()) {
-                    savePartialContent(aiMessageId, partialContent);
-                }
-                updateChatTimestamp(ctx.chat().getId());
+                // cancel API에서 이미 content 저장 + status 변경 처리했으므로 SSE만 종료
+                transactionTemplate.executeWithoutResult(status -> {
+                    Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
+                    chat.touchUpdatedAt();
+                });
                 emitter.complete();
 
             } catch (Exception e) {
                 log.error("SSE 스트리밍 실패", e);
                 try {
-                    failAiMessage(aiMessageId);
-                    updateChatTimestamp(ctx.chat().getId());
+                    transactionTemplate.executeWithoutResult(status -> {
+                        Message message = messageRepository.findById(aiMessageId).orElseThrow();
+                        message.updateStatus(MessageStatus.FAILED);
+                        Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
+                        chat.touchUpdatedAt();
+                    });
                     sendEvent(emitter, "error", MessageResDto.SseError.builder()
                             .code(ErrorStatus.LLM_CALL_FAILED.getCode())
                             .message(ErrorStatus.LLM_CALL_FAILED.getMessage())
@@ -159,7 +177,7 @@ public class MessageService {
                 }
                 emitter.completeWithError(e);
             } finally {
-                cancelFlags.remove(aiMessageId);
+                streamingContexts.remove(aiMessageId);
             }
         });
 
@@ -184,15 +202,38 @@ public class MessageService {
             throw new ProjectException(ErrorStatus.MESSAGE_NOT_FOUND);
         }
 
-        // 3. 상태 전이
+        // 3. AI 메시지만 cancel 가능
+        if (message.getSenderType() != SenderType.AI) {
+            throw new ProjectException(ErrorStatus.MESSAGE_CANCEL_NOT_ALLOWED);
+        }
+
+        // 4. 상태 전이
+        String partialContent = null;
+        Integer partialToken = null;
+
         switch (message.getStatus()) {
             case STREAMING -> {
+                // cancel 시그널 + buffer에서 부분 content 읽기
+                StreamingContext streamCtx = streamingContexts.get(messageId);
+                if (streamCtx != null) {
+                    streamCtx.canceled().set(true);
+                    String buffered = streamCtx.contentBuffer().toString();
+                    if (!buffered.isEmpty()) {
+                        partialContent = buffered;
+                        partialToken = buffered.split("\\s+").length;
+                    }
+                }
+
                 message.updateStatus(MessageStatus.CANCELED);
-                // 스트리밍 스레드에 cancel 시그널
-                cancelFlags.put(messageId, true);
+                if (partialContent != null) {
+                    message.updateContent(partialContent);
+                    message.updateAnswerToken(partialToken);
+                }
             }
             case CANCELED -> {
-                // idempotent
+                // idempotent — 기존 값 그대로 반환
+                partialContent = message.getContent();
+                partialToken = message.getAnswerToken();
             }
             case COMPLETED, FAILED -> {
                 throw new ProjectException(ErrorStatus.MESSAGE_CANCEL_NOT_ALLOWED);
@@ -204,49 +245,12 @@ public class MessageService {
         return MessageResDto.CancelResult.builder()
                 .messageId(message.getId())
                 .status(message.getStatus())
-                .content(message.getContent())
-                .answerToken(message.getAnswerToken())
+                .content(partialContent)
+                .answerToken(partialToken)
                 .build();
     }
 
-    // ── 내부 메서드 ──
-
-    @Transactional
-    public void completeAiMessage(Long messageId, String content, int answerToken) {
-        Message message = messageRepository.findById(messageId).orElseThrow();
-        // cancel된 경우 덮어쓰지 않음
-        if (message.getStatus() == MessageStatus.STREAMING) {
-            message.updateContent(content);
-            message.updateStatus(MessageStatus.COMPLETED);
-            message.updateAnswerToken(answerToken);
-        }
-    }
-
-    @Transactional
-    public void savePartialContent(Long messageId, String partialContent) {
-        Message message = messageRepository.findById(messageId).orElseThrow();
-        message.updateContent(partialContent);
-        int partialToken = partialContent.split("\\s+").length;
-        message.updateAnswerToken(partialToken);
-    }
-
-    @Transactional
-    public void failAiMessage(Long messageId) {
-        Message message = messageRepository.findById(messageId).orElseThrow();
-        message.updateStatus(MessageStatus.FAILED);
-    }
-
-    @Transactional
-    public void updateTurnSummary(Long turnId, String summary) {
-        Turn turn = turnRepository.findById(turnId).orElseThrow();
-        turn.updateSummary(summary);
-    }
-
-    @Transactional
-    public void updateChatTimestamp(Long chatId) {
-        Chat chat = chatRepository.findById(chatId).orElseThrow();
-        chat.touchUpdatedAt();
-    }
+    // ── 내부 유틸 ──
 
     private void sendEvent(SseEmitter emitter, String eventName, Object data) throws IOException {
         emitter.send(SseEmitter.event()
@@ -256,6 +260,5 @@ public class MessageService {
 
     public record TurnContext(Chat chat, Turn turn, Message userMessage, Message aiMessage) {}
 
-    // 스트리밍 스레드 내부에서 cancel 감지용
     private static class CancelException extends RuntimeException {}
 }

@@ -7,7 +7,9 @@ import com.aistar.backend.domain.chat.enums.CursorDirection;
 import com.aistar.backend.domain.chat.service.ChatService;
 import com.aistar.backend.domain.chat.service.TurnService;
 import com.aistar.backend.global.apiPayload.ApiResponse;
+import com.aistar.backend.global.apiPayload.code.ErrorStatus;
 import com.aistar.backend.global.apiPayload.code.SuccessStatus;
+import com.aistar.backend.global.apiPayload.exception.ProjectException;
 import com.aistar.backend.global.security.CustomUserDetails;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -69,7 +71,12 @@ public class ChatController {
             @RequestParam(defaultValue = "20") int limit,
             @RequestParam(defaultValue = "BACKWARD") CursorDirection direction
     ) {
-        limit = Math.max(1, Math.min(limit, 50));
+        if (limit < 1 || limit > 50) {
+            throw new ProjectException(ErrorStatus.INVALID_INPUT);
+        }
+        if (lastTurnSequence != null && lastTurnSequence < 0) {
+            throw new ProjectException(ErrorStatus.INVALID_INPUT);
+        }
         return ApiResponse.onSuccess(SuccessStatus.OK,
                 turnService.getTurns(userDetails.getMember().getId(), chatId,
                         lastTurnSequence, limit, direction));

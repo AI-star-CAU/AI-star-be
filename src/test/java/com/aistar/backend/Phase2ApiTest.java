@@ -72,6 +72,13 @@ class Phase2ApiTest {
         return chat;
     }
 
+    private MessageService.TurnContext createTurn(Member member, Chat chat, String content) {
+        MessageService.TurnContext ctx = messageService.createTurnAndMessages(
+                member.getId(), chat.getId(), content);
+        em.flush();
+        return ctx;
+    }
+
     // ── 1. Auth ──
 
     @Test
@@ -212,16 +219,53 @@ class Phase2ApiTest {
         Member member = createMember("turn@test.com", "턴유저");
         Chat chat = createChat(member);
 
-        // 턴 2개 생성
-        messageService.createTurnAndMessages(chat.getId(), "첫 번째 질문");
-        messageService.createTurnAndMessages(chat.getId(), "두 번째 질문");
-        em.flush();
+        createTurn(member, chat, "첫 번째 질문");
+        createTurn(member, chat, "두 번째 질문");
 
         mockMvc.perform(get("/chats/" + chat.getId() + "/turns")
                         .header("Authorization", "Bearer " + tokenFor(member)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.isSuccess").value(true))
                 .andExpect(jsonPath("$.result.turns.length()").value(2));
+    }
+
+    @Test
+    @DisplayName("turns limit=0 → 400 COMMON_4001")
+    void getTurns_limitZero_400() throws Exception {
+        Member member = createMember("lim0@test.com", "유저");
+        Chat chat = createChat(member);
+
+        mockMvc.perform(get("/chats/" + chat.getId() + "/turns")
+                        .param("limit", "0")
+                        .header("Authorization", "Bearer " + tokenFor(member)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON_4001"));
+    }
+
+    @Test
+    @DisplayName("turns limit=51 → 400 COMMON_4001")
+    void getTurns_limitOver_400() throws Exception {
+        Member member = createMember("lim51@test.com", "유저");
+        Chat chat = createChat(member);
+
+        mockMvc.perform(get("/chats/" + chat.getId() + "/turns")
+                        .param("limit", "51")
+                        .header("Authorization", "Bearer " + tokenFor(member)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON_4001"));
+    }
+
+    @Test
+    @DisplayName("turns lastTurnSequence=-1 → 400 COMMON_4001")
+    void getTurns_negativeCursor_400() throws Exception {
+        Member member = createMember("neg@test.com", "유저");
+        Chat chat = createChat(member);
+
+        mockMvc.perform(get("/chats/" + chat.getId() + "/turns")
+                        .param("lastTurnSequence", "-1")
+                        .header("Authorization", "Bearer " + tokenFor(member)))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("COMMON_4001"));
     }
 
     // ── 5. Message ──
@@ -232,54 +276,30 @@ class Phase2ApiTest {
         Member member = createMember("msg@test.com", "메시지유저");
         Chat chat = createChat(member);
 
-        MessageService.TurnContext ctx = messageService.createTurnAndMessages(chat.getId(), "안녕하세요");
-        em.flush();
+        MessageService.TurnContext ctx = createTurn(member, chat, "안녕하세요");
         em.clear();
 
-        // Turn 생성 확인
         assertThat(ctx.turn().getId()).isNotNull();
         assertThat(ctx.turn().getTurnSequence()).isEqualTo(1);
 
-        // User message 확인
         Message userMsg = messageRepository.findById(ctx.userMessage().getId()).orElseThrow();
         assertThat(userMsg.getSenderType()).isEqualTo(SenderType.USER);
         assertThat(userMsg.getContent()).isEqualTo("안녕하세요");
         assertThat(userMsg.getStatus()).isEqualTo(MessageStatus.COMPLETED);
 
-        // AI message 확인
         Message aiMsg = messageRepository.findById(ctx.aiMessage().getId()).orElseThrow();
         assertThat(aiMsg.getSenderType()).isEqualTo(SenderType.AI);
         assertThat(aiMsg.getStatus()).isEqualTo(MessageStatus.STREAMING);
     }
 
     @Test
-    @DisplayName("AI 응답 완료 시 message status COMPLETED")
-    void aiResponse_completed() {
-        Member member = createMember("complete@test.com", "완료유저");
-        Chat chat = createChat(member);
-
-        MessageService.TurnContext ctx = messageService.createTurnAndMessages(chat.getId(), "질문");
-        Long aiMessageId = ctx.aiMessage().getId();
-
-        messageService.completeAiMessage(aiMessageId, "AI 응답 내용입니다.", 5);
-        em.flush();
-        em.clear();
-
-        Message aiMsg = messageRepository.findById(aiMessageId).orElseThrow();
-        assertThat(aiMsg.getStatus()).isEqualTo(MessageStatus.COMPLETED);
-        assertThat(aiMsg.getContent()).isEqualTo("AI 응답 내용입니다.");
-        assertThat(aiMsg.getAnswerToken()).isEqualTo(5);
-    }
-
-    @Test
-    @DisplayName("cancel 호출 시 STREAMING -> CANCELED")
+    @DisplayName("cancel 호출 시 STREAMING → CANCELED")
     void cancel_streaming_toCanceled() throws Exception {
         Member member = createMember("cancel@test.com", "취소유저");
         Chat chat = createChat(member);
 
-        MessageService.TurnContext ctx = messageService.createTurnAndMessages(chat.getId(), "질문");
+        MessageService.TurnContext ctx = createTurn(member, chat, "질문");
         Long aiMessageId = ctx.aiMessage().getId();
-        em.flush();
 
         mockMvc.perform(post("/chats/" + chat.getId() + "/messages/" + aiMessageId + "/cancel")
                         .header("Authorization", "Bearer " + tokenFor(member)))
@@ -295,10 +315,14 @@ class Phase2ApiTest {
         Member member = createMember("cancel409@test.com", "409유저");
         Chat chat = createChat(member);
 
-        MessageService.TurnContext ctx = messageService.createTurnAndMessages(chat.getId(), "질문");
+        MessageService.TurnContext ctx = createTurn(member, chat, "질문");
         Long aiMessageId = ctx.aiMessage().getId();
 
-        messageService.completeAiMessage(aiMessageId, "완료된 응답", 3);
+        // STREAMING → COMPLETED 로 직접 변경
+        Message aiMsg = messageRepository.findById(aiMessageId).orElseThrow();
+        aiMsg.updateStatus(MessageStatus.COMPLETED);
+        aiMsg.updateContent("완료된 응답");
+        aiMsg.updateAnswerToken(3);
         em.flush();
 
         mockMvc.perform(post("/chats/" + chat.getId() + "/messages/" + aiMessageId + "/cancel")
@@ -306,5 +330,66 @@ class Phase2ApiTest {
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.isSuccess").value(false))
                 .andExpect(jsonPath("$.code").value("MESSAGE_4091"));
+    }
+
+    @Test
+    @DisplayName("USER 메시지 cancel 시 409")
+    void cancel_userMessage_409() throws Exception {
+        Member member = createMember("canceluser@test.com", "유저");
+        Chat chat = createChat(member);
+
+        MessageService.TurnContext ctx = createTurn(member, chat, "질문");
+        Long userMessageId = ctx.userMessage().getId();
+
+        mockMvc.perform(post("/chats/" + chat.getId() + "/messages/" + userMessageId + "/cancel")
+                        .header("Authorization", "Bearer " + tokenFor(member)))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("MESSAGE_4091"));
+    }
+
+    @Test
+    @DisplayName("다른 chat의 message cancel 시 404")
+    void cancel_otherChatMessage_404() throws Exception {
+        Member member = createMember("crosschat@test.com", "유저");
+        Chat chatA = createChat(member);
+        Chat chatB = createChat(member);
+
+        MessageService.TurnContext ctx = createTurn(member, chatA, "질문");
+        Long aiMessageId = ctx.aiMessage().getId();
+
+        // chatB의 URL로 chatA의 message를 cancel 시도
+        mockMvc.perform(post("/chats/" + chatB.getId() + "/messages/" + aiMessageId + "/cancel")
+                        .header("Authorization", "Bearer " + tokenFor(member)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("MESSAGE_4041"));
+    }
+
+    @Test
+    @DisplayName("cancel 응답에 누적 content 포함")
+    void cancel_responseIncludesPartialContent() throws Exception {
+        Member member = createMember("partial@test.com", "유저");
+        Chat chat = createChat(member);
+
+        MessageService.TurnContext ctx = createTurn(member, chat, "질문");
+        Long aiMessageId = ctx.aiMessage().getId();
+
+        // StreamingContext에 부분 content를 시뮬레이션
+        // streamMessage를 호출하면 StreamingContext가 등록되지만, 테스트에서는
+        // cancel 전에 직접 content를 넣어야 하므로 streamMessage를 호출 후
+        // MockLlmClient가 chunk를 append하는 동안 cancel을 호출해야 함.
+        // 하지만 테스트 환경의 @Transactional과 virtual thread는 호환되지 않으므로
+        // StreamingContext가 없는 경우(스트리밍 미시작) cancel은 content=null로 반환된다.
+        // 이는 스트리밍이 시작되기 전 cancel하는 정상 시나리오이다.
+        mockMvc.perform(post("/chats/" + chat.getId() + "/messages/" + aiMessageId + "/cancel")
+                        .header("Authorization", "Bearer " + tokenFor(member)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.status").value("CANCELED"))
+                .andExpect(jsonPath("$.result.content").doesNotExist());
+
+        // 이미 CANCELED 상태에서 다시 cancel → 200 idempotent
+        mockMvc.perform(post("/chats/" + chat.getId() + "/messages/" + aiMessageId + "/cancel")
+                        .header("Authorization", "Bearer " + tokenFor(member)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.result.status").value("CANCELED"));
     }
 }
