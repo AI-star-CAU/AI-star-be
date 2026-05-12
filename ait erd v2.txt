@@ -29,7 +29,7 @@ CREATE TABLE `message` (
 
 CREATE TABLE `chat` (
 	`aichat_session_id`	bigint	NOT NULL,
-	`root_chat_id`	bigint	NOT NULL,
+	`root_chat_id`	bigint	NULL,
 	`title`	text	NOT NULL	DEFAULT 제목없음,
 	`created_at`	timestamp	NOT NULL	DEFAULT now(),
 	`updated_at`	timestamp	NOT NULL	DEFAULT now(),

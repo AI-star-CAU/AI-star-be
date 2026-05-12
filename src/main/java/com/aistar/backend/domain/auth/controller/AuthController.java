@@ -6,6 +6,7 @@ import com.aistar.backend.domain.auth.service.AuthService;
 import com.aistar.backend.global.apiPayload.ApiResponse;
 import com.aistar.backend.global.apiPayload.code.SuccessStatus;
 import io.swagger.v3.oas.annotations.Operation;
+import io.swagger.v3.oas.annotations.security.SecurityRequirements;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +22,7 @@ public class AuthController {
     private final AuthService authService;
 
     @Operation(summary = "회원가입")
+    @SecurityRequirements({})
     @PostMapping("/signup")
     @ResponseStatus(HttpStatus.CREATED)
     public ApiResponse<AuthResDto.SignUp> signUp(@RequestBody @Valid AuthReqDto.SignUp dto) {
@@ -28,6 +30,7 @@ public class AuthController {
     }
 
     @Operation(summary = "로그인")
+    @SecurityRequirements({})
     @PostMapping("/login")
     public ApiResponse<AuthResDto.Login> login(@RequestBody @Valid AuthReqDto.Login dto) {
         return ApiResponse.onSuccess(SuccessStatus.OK, authService.login(dto));
