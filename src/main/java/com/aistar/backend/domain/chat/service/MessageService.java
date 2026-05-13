@@ -162,8 +162,8 @@ public class MessageService {
                 });
 
                 try {
-                    sendEvent(emitter, "cancelled", MessageResDto.CancelResult.builder()
-                            .messageId(aiMessageId)
+                    sendEvent(emitter, "cancelled", MessageResDto.Cancelled.builder()
+                            .aiMessageId(aiMessageId)
                             .status(MessageStatus.CANCELED)
                             .content(partialContent.isEmpty() ? null : partialContent)
                             .answerToken(partialToken)

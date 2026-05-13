@@ -40,4 +40,12 @@ public class MessageResDto {
             String content,
             Integer answerToken
     ) {}
+
+    @Builder
+    public record Cancelled(
+            Long aiMessageId,
+            MessageStatus status,
+            String content,
+            Integer answerToken
+    ) {}
 }

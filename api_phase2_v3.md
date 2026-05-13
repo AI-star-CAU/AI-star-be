@@ -42,7 +42,7 @@ https://api.ait.example.com/api/v1
 
 ### 0.3 응답 형식 — `ApiResponse<T>` 단일 래퍼
 
-성공/실패 모두 같은 구조로 응답한다. 클라이언트는 단일 타입(`ApiResponse<T>`)으로 모든 응답을 파싱 가능.
+일반 JSON API 와 스트리밍 시작 전 에러는 `ApiResponse<T>` 로 응답한다. 단, `POST /chats/{chatId}/messages` 의 HTTP 200 스트리밍 응답은 SSE 이벤트 프로토콜을 따른다 (§2.5 참조).
 
 **스키마**
 
@@ -618,6 +618,8 @@ Authorization: Bearer <accessToken>
 | `BACKWARD` | 기존 목록 **앞에 prepend** | 이전 메시지를 위로 쌓기 |
 | `FORWARD` | 기존 목록 **뒤에 append** | 새 메시지를 아래에 추가 |
 
+> **FORWARD polling 커서 규칙**: `FORWARD` 요청에서 새 데이터가 없으면 (`hasMore=false`, `nextTurnSequence=null`) 클라이언트는 기존에 보유한 최신 `turnSequence` 값을 유지하고, 다음 polling 시 동일 값을 `lastTurnSequence`로 재사용한다.
+
 **응답 (200 OK)**
 
 `result` 필드:
@@ -773,7 +775,7 @@ data: {}
 | `chunk` | `{text: String}` | content 누적 (status 그대로) |
 | `turn_completed` | `{aiMessageId: Long, summary: String, answerToken: Integer}` | assistant 메시지 `STREAMING` → `COMPLETED` |
 | `error` | `{code: String, message: String, retryable: Boolean}` | assistant 메시지 `STREAMING` → `FAILED` |
-| `cancelled` | `{messageId: Long, status: "CANCELED", content: String?, answerToken: Integer?}` | assistant 메시지 `STREAMING` → `CANCELED` |
+| `cancelled` | `{aiMessageId: Long, status: "CANCELED", content: String?, answerToken: Integer?}` | assistant 메시지 `STREAMING` → `CANCELED` |
 | `done` | `{}` | (종료 신호) 모든 종료 경로에서 스트림 닫기 직전 전송 |
 
 **이벤트 순서 규칙**
@@ -855,8 +857,12 @@ Authorization: Bearer <accessToken>
 스트리밍 중인 assistant 메시지의 생성을 취소한다. 클라이언트 흐름:
 1. 사용자가 취소 버튼 클릭
 2. 이 API 호출 → 서버가 LLM stream cancel + 메시지 `status=CANCELED` 로 갱신
-3. 클라이언트가 SSE 연결도 종료 (`AbortController.abort()`)
-messageId가 실제로 chatId에 속한 메시지인지 확인 필요 
+3. SSE 에서 `event: cancelled` → `event: done` 수신
+4. `done` 수신 후 SSE 연결 정리
+
+> **주의:** cancel API 호출 직후 바로 `AbortController.abort()` 하지 않는다. `cancelled → done` 이벤트를 수신한 뒤 정리해야 부분 content 를 안정적으로 받을 수 있다.
+
+messageId가 실제로 chatId에 속한 메시지인지 확인 필요.
 
 **Path Parameters**
 
@@ -1060,15 +1066,27 @@ await fetchEventSource(`/api/v1/chats/42/messages`, {
   signal: ctrl.signal,
   onmessage(ev) {
     const data = JSON.parse(ev.data);
-    if (ev.event === 'turn_started') {
-      currentAiMessageId = data.aiMessageId;
-      initMessage(data.aiMessageId);
-    } else if (ev.event === 'chunk') {
-      appendText(data.text);
-    } else if (ev.event === 'turn_completed') {
-      finalizeMessage(data.aiMessageId, data.summary);
-    } else if (ev.event === 'error') {
-      showError(data.message);
+    switch (ev.event) {
+      case 'turn_started':
+        currentAiMessageId = data.aiMessageId;
+        initMessage(data.aiMessageId);
+        break;
+      case 'chunk':
+        appendText(data.text);
+        break;
+      case 'turn_completed':
+        finalizeMessage(data.aiMessageId, data.summary);
+        break;
+      case 'error':
+        showError(data.message, data.retryable);
+        break;
+      case 'cancelled':
+        showCancelled(data.aiMessageId, data.content);
+        break;
+      case 'done':
+        // 스트림 정상 종료 — 연결 정리
+        ctrl.abort();
+        break;
     }
   },
 });
@@ -1080,8 +1098,7 @@ cancelButton.onclick = async () => {
     method: 'POST',
     headers: { 'Authorization': `Bearer ${accessToken}` },
   });
-  // 2. SSE 연결도 끊기
-  ctrl.abort();
+  // 2. SSE에서 cancelled → done 수신 후 자동 정리됨 (abort는 done 핸들러에서)
 };
 ```
 
@@ -1126,3 +1143,8 @@ cancelButton.onclick = async () => {
 | 10 | 턴 목록 prepend/append | BACKWARD → prepend, FORWARD → append 규칙 명시 |
 | 11 | 빈 채팅 정책 | `POST /chats` 후 메시지 실패 시 빈 채팅 처리 정책 문서화 |
 | 12 | `lastMessageAt` null | null 시 `createdAt` 대체 표시 규칙 명시 |
+| 13 | §0.3 SSE 예외 | SSE 엔드포인트는 ApiResponse 래퍼 예외 명시 |
+| 14 | Cancel 흐름 명확화 | `cancelled → done` 수신 후 abort 규칙, §2.6 주의사항 추가 |
+| 15 | 부록 A 갱신 | done/cancelled/error 처리 반영, cancel 대기 패턴 예시 |
+| 16 | FORWARD polling 커서 | 새 데이터 없을 때 기존 커서 유지 규칙 명시 |
+| 17 | `cancelled` 필드명 통일 | `messageId` → `aiMessageId` (turn_completed과 통일) |
