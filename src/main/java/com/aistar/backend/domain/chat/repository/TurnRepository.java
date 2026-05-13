@@ -2,11 +2,16 @@ package com.aistar.backend.domain.chat.repository;
 
 import com.aistar.backend.domain.chat.entity.Turn;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.util.List;
 import java.util.Optional;
 
 public interface TurnRepository extends JpaRepository<Turn, Long> {
+
+    @Query("SELECT t.chat.id, COUNT(t) FROM Turn t WHERE t.chat.id IN :chatIds GROUP BY t.chat.id")
+    List<Object[]> countByChatIds(@Param("chatIds") List<Long> chatIds);
 
     // 해당 chat의 최대 turnSequence 조회 (새 턴 생성 시 +1 용)
     Optional<Turn> findTopByChatIdOrderByTurnSequenceDesc(Long chatId);

@@ -1,5 +1,6 @@
 package com.aistar.backend.domain.auth.dto;
 
+import com.aistar.backend.domain.member.enums.MemberType;
 import lombok.Builder;
 
 public class AuthResDto {
@@ -9,12 +10,18 @@ public class AuthResDto {
             Long memberId,
             String email,
             String name,
+            MemberType type,
+            String profileUrl,
             String accessToken
     ) {}
 
     @Builder
     public record Login(
             Long memberId,
+            String email,
+            String name,
+            MemberType type,
+            String profileUrl,
             String accessToken
     ) {}
 }

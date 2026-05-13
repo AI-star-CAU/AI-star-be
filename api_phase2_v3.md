@@ -1,8 +1,8 @@
 # Phase 2 API 명세서
 
 **문서 식별자:** API-AIT-P2  
-**버전:** 0.3  
-**작성일:** 2026-05-10  
+**버전:** 0.4  
+**작성일:** 2026-05-13  
 **대상 Phase:** Phase 2 (W11) — Walking Skeleton  
 **범위:** FG-1 대화 작성 + FG-7 인증 + Phase 2 동작에 필요한 최소 보조 기능 (FR-4.1 루트 대화 생성, FR-6.2 대화 목록 제공, FR-10.1 LLM 선택, FR-2.3 턴 요약)  
 **기준 ERD:** `ait_erd_v2`
@@ -27,6 +27,16 @@ https://api.ait.example.com/api/v1
 - 인증 처리: Spring Security `SecurityFilterChain` + `JwtAuthenticationFilter`
 - 미인증 엔드포인트 (permitAll): `/auth/signup`, `/auth/login`
 - **Phase 2 결정:** Refresh Token 미사용. Token 만료 시 사용자가 재로그인. 후속 Phase 에서 도입 예정.
+
+### 0.2.1 프론트엔드 권장 흐름 — 첫 메시지로 대화 시작
+
+사용자가 첫 메시지를 입력해 새 대화를 시작하는 경우:
+
+1. 클라이언트는 먼저 `POST /api/v1/chats` 로 루트 대화를 생성한다.
+2. 응답으로 받은 `chatId` 를 사용해 `POST /api/v1/chats/{chatId}/messages` 를 호출한다.
+3. 사용자에게는 하나의 "첫 메시지 입력 → 대화 시작" 흐름처럼 보여주면 된다.
+
+> 대화 생성(`POST /chats`)과 메시지 송신(`POST /chats/{chatId}/messages`)은 각각 JSON 응답과 SSE 스트리밍이라는 다른 응답 형식을 가지므로, 하나의 API 로 합치지 않는다.
 
 ### 0.3 응답 형식 — `ApiResponse<T>` 단일 래퍼
 
@@ -181,6 +191,8 @@ Content-Type: application/json
 | `memberId` | Long | 생성된 회원 ID |
 | `email` | String | |
 | `name` | String | |
+| `type` | Enum<"USER" \| "ADMIN"> | 회원 종류 (기본 USER) |
+| `profileUrl` | String? | 프로필 이미지 URL |
 | `accessToken` | String | JWT 액세스 토큰 (12시간 유효) |
 
 ```json
@@ -192,6 +204,8 @@ Content-Type: application/json
     "memberId": 1,
     "email": "user@example.com",
     "name": "홍길동",
+    "type": "USER",
+    "profileUrl": null,
     "accessToken": "eyJhbGciOiJIUzI1NiJ9..."
   }
 }
@@ -236,6 +250,10 @@ Content-Type: application/json
 | 필드 | 타입 | 설명 |
 |---|---|---|
 | `memberId` | Long | |
+| `email` | String | |
+| `name` | String | |
+| `type` | Enum<"USER" \| "ADMIN"> | 회원 종류 |
+| `profileUrl` | String? | 프로필 이미지 URL |
 | `accessToken` | String | JWT (12시간 유효) |
 
 ```json
@@ -245,6 +263,10 @@ Content-Type: application/json
   "message": "요청에 성공하였습니다.",
   "result": {
     "memberId": 1,
+    "email": "user@example.com",
+    "name": "홍길동",
+    "type": "USER",
+    "profileUrl": null,
     "accessToken": "eyJhbGciOiJIUzI1NiJ9..."
   }
 }
@@ -436,10 +458,15 @@ Authorization: Bearer <accessToken>
 |---|---|---|
 | `chatId` | Long | |
 | `title` | String | |
+| `lastMessagePreview` | String? | 마지막 메시지 미리보기 (최대 100자) |
+| `turnCount` | Integer | 대화에 포함된 턴 수 |
+| `lastMessageAt` | DateTime? | 마지막 메시지 생성 시각 |
 | `llmProvider` | Enum | |
 | `llmModel` | Enum | |
 | `createdAt` | DateTime | |
-| `updatedAt` | DateTime | |
+| `updatedAt` | DateTime | chat 자체 정보 수정 시각 |
+
+> `updatedAt` 은 chat 메타정보(제목 등)가 변경된 시각이며, `lastMessageAt` 은 마지막 대화 활동 시각이다. 현재 구현에서는 메시지 송신/취소 시 `updatedAt` 도 함께 갱신되므로 값이 유사할 수 있다.
 
 ```json
 {
@@ -451,6 +478,9 @@ Authorization: Bearer <accessToken>
       {
         "chatId": 42,
         "title": "Spring Security 학습",
+        "lastMessagePreview": "Spring Security는 ServletFilter 체인의 형태로...",
+        "turnCount": 12,
+        "lastMessageAt": "2026-05-06T11:30:00Z",
         "llmProvider": "OPENAI",
         "llmModel": "gpt-4o-mini",
         "createdAt": "2026-05-06T11:00:00Z",
@@ -459,6 +489,9 @@ Authorization: Bearer <accessToken>
       {
         "chatId": 41,
         "title": "분기 그래프 설계 논의",
+        "lastMessagePreview": "그래프 구조를 트리 형태로 표현하면...",
+        "turnCount": 5,
+        "lastMessageAt": "2026-05-05T16:45:00Z",
         "llmProvider": "ANTHROPIC",
         "llmModel": "claude-3.5-sonnet",
         "createdAt": "2026-05-05T14:20:00Z",
@@ -579,7 +612,7 @@ Authorization: Bearer <accessToken>
 
 | 필드 | 타입 | 설명 |
 |---|---|---|
-| `turns` | Array<TurnDto> | 턴 목록 (BACKWARD 시 turn_sequence 내림차순) |
+| `turns` | Array<TurnDto> | 턴 목록 (항상 turn_sequence 오름차순) |
 | `nextTurnSequence` | Integer? | 다음 호출 시 보낼 `lastTurnSequence` 값 (`hasMore=false` 면 null) |
 | `hasMore` | Boolean | 더 가져올 페이지 존재 여부 |
 
@@ -590,7 +623,7 @@ Authorization: Bearer <accessToken>
 | `turnId` | Long | |
 | `turnSequence` | Integer | 분기 내 순서 |
 | `summary` | String | 턴 요약 (FR-2.3, default "제목없음") |
-| `messages` | Array<MessageDto> | user 메시지 1 + ai 메시지 0~1 |
+| `messages` | Array<MessageDto> | user 메시지 1 + assistant 메시지 0~1 |
 | `createdAt` | DateTime | |
 
 **MessageDto**
@@ -598,11 +631,11 @@ Authorization: Bearer <accessToken>
 | 필드 | 타입 | 설명 |
 |---|---|---|
 | `messageId` | Long | |
-| `senderType` | Enum<"USER" \| "AI"> | |
+| `senderType` | Enum<"USER" \| "ASSISTANT"> | |
 | `status` | Enum<"STREAMING" \| "COMPLETED" \| "CANCELED" \| "FAILED"> | FR-1.3 |
 | `content` | String? | 응답 취소/실패 시 부분 텍스트일 수 있음 |
 | `promptToken` | Integer? | user 메시지에만 |
-| `answerToken` | Integer? | AI 메시지에만 |
+| `answerToken` | Integer? | assistant 메시지에만 |
 | `createdAt` | DateTime | |
 
 ```json
@@ -612,6 +645,12 @@ Authorization: Bearer <accessToken>
   "message": "요청에 성공하였습니다.",
   "result": {
     "turns": [
+      {
+        "turnId": 149,
+        "turnSequence": 149,
+        "summary": "JWT 토큰 만료 처리",
+        "messages": [...]
+      },
       {
         "turnId": 150,
         "turnSequence": 150,
@@ -628,7 +667,7 @@ Authorization: Bearer <accessToken>
           },
           {
             "messageId": 301,
-            "senderType": "AI",
+            "senderType": "ASSISTANT",
             "status": "COMPLETED",
             "content": "Spring Security는 ServletFilter 체인의 형태로...",
             "promptToken": null,
@@ -637,12 +676,6 @@ Authorization: Bearer <accessToken>
           }
         ],
         "createdAt": "2026-05-06T11:01:00Z"
-      },
-      {
-        "turnId": 149,
-        "turnSequence": 149,
-        "summary": "JWT 토큰 만료 처리",
-        "messages": [...]
       }
     ],
     "nextTurnSequence": 149,
@@ -721,14 +754,21 @@ data: {"aiMessageId": 201, "summary": "Spring Security 필터 체인 동작 원�
 
 | event | data 스키마 | DB 상태 변화 |
 |---|---|---|
-| `turn_started` | `{turnId: Long, userMessageId: Long, aiMessageId: Long}` | user 메시지 `COMPLETED`, AI 메시지 `STREAMING` 으로 생성 |
+| `turn_started` | `{turnId: Long, userMessageId: Long, aiMessageId: Long}` | user 메시지 `COMPLETED`, assistant 메시지 `STREAMING` 으로 생성 |
 | `chunk` | `{text: String}` | content 누적 (status 그대로) |
-| `turn_completed` | `{aiMessageId: Long, summary: String, answerToken: Integer}` | AI 메시지 `STREAMING` → `COMPLETED` |
-| `error` | `{code: String, message: String}` | AI 메시지 `STREAMING` → `FAILED` |
+| `turn_completed` | `{aiMessageId: Long, summary: String, answerToken: Integer}` | assistant 메시지 `STREAMING` → `COMPLETED` |
+| `error` | `{code: String, message: String}` | assistant 메시지 `STREAMING` → `FAILED` |
 
-**스트리밍 시작 전 에러**
+**에러 응답 규칙**
 
-인증 실패, chatId 없음 등 SSE 시작 *전* 에러는 일반 `ApiResponse<T>` 로 반환:
+이 엔드포인트는 에러 발생 시점에 따라 응답 형식이 다르다. 클라이언트는 HTTP 상태 코드로 분기한다:
+
+| 시점 | HTTP 상태 | Content-Type | 형식 |
+|---|---|---|---|
+| 스트리밍 시작 전 | 4xx / 5xx | `application/json` | `ApiResponse<T>` JSON |
+| 스트리밍 시작 후 | 200 | `text/event-stream` | SSE `event: error` |
+
+- **스트리밍 시작 전 에러** (인증 실패, 권한 없음, chatId 없음, content 빈 문자열, 입력값 검증 실패):
 
 ```json
 {
@@ -738,6 +778,15 @@ data: {"aiMessageId": 201, "summary": "Spring Security 필터 체인 동작 원�
   "result": null
 }
 ```
+
+- **스트리밍 시작 후 에러** (LLM API 호출 실패, 스트림 처리 중 예외): SSE 연결 내부에서 `event: error` 로 전달.
+
+```
+event: error
+data: {"code": "LLM_5001", "message": "LLM 서비스 호출에 실패했습니다."}
+```
+
+> 프론트엔드 구현 규칙: HTTP 상태가 4xx/5xx 이면 JSON `ApiResponse` 파싱, HTTP 200 + `text/event-stream` 이면 SSE 이벤트 핸들러로 처리.
 
 **응답 취소:** 별도 cancel API 사용 (§2.6 참조). SSE abort 만으로는 처리하지 않음.
 
@@ -765,7 +814,7 @@ Authorization: Bearer <accessToken>
 
 **인증 필요:** ✓
 
-스트리밍 중인 AI 메시지의 생성을 취소한다. 클라이언트 흐름:
+스트리밍 중인 assistant 메시지의 생성을 취소한다. 클라이언트 흐름:
 1. 사용자가 취소 버튼 클릭
 2. 이 API 호출 → 서버가 LLM stream cancel + 메시지 `status=CANCELED` 로 갱신
 3. 클라이언트가 SSE 연결도 종료 (`AbortController.abort()`)
@@ -776,7 +825,7 @@ messageId가 실제로 chatId에 속한 메시지인지 확인 필요
 | 파라미터 | 타입 | 설명 |
 |---|---|---|
 | `chatId` | Long | |
-| `messageId` | Long | 취소할 AI 메시지 ID (`turn_started` 이벤트에서 받은 `aiMessageId`) |
+| `messageId` | Long | 취소할 assistant 메시지 ID (`turn_started` 이벤트에서 받은 `aiMessageId`) |
 
 **요청 본문:** 없음
 
@@ -918,7 +967,7 @@ Authorization: Bearer <accessToken>
 | ERD 컬럼 | API 필드 |
 |---|---|
 | `message_id` | `messageId` |
-| `sender_type` | `senderType` (USER, AI) |
+| `sender_type` | `senderType` (USER, ASSISTANT) |
 | `status` | `status` (STREAMING, COMPLETED, CANCELED, FAILED) |
 | `content` | `content` |
 | `prompt_token` | `promptToken` |
@@ -1008,6 +1057,7 @@ cancelButton.onclick = async () => {
 | 0.1 | 2026-05-06 | 초안 |
 | 0.2 | 2026-05-10 | 실제 ERD(`ait_erd_v2`) 반영 + `ApiResponse<T>` 단일 래퍼 패턴 |
 | 0.3 | 2026-05-10 | 리뷰 반영 |
+| 0.4 | 2026-05-13 | 프론트엔드 피드백 반영 |
 
 **v0.2 → v0.3 주요 변경:**
 
@@ -1021,3 +1071,15 @@ cancelButton.onclick = async () => {
 | 6 | 로그인 에러 통일 | 존재하지 않는 이메일도 401 AUTH_4012 로 통일 (보안) |
 | 7 | Cancel API 추가 | `POST /chats/{id}/messages/{mid}/cancel` 신설. SSE abort 만 의존하지 않음 |
 | 추가 | 엔드포인트 표기 | 모든 API 에 전체 URL + 헤더 명시 (복붙용) |
+
+**v0.3 → v0.4 주요 변경:**
+
+| # | 항목 | 변경 |
+|---|---|---|
+| 1 | 프론트 권장 흐름 | §0.2.1 신설 — 대화 생성 + 첫 메시지 2단계 흐름 문서화 |
+| 2 | 대화 목록 필드 확장 | `lastMessagePreview`, `turnCount`, `lastMessageAt` 추가 |
+| 3 | 턴 목록 응답 순서 | BACKWARD/FORWARD 모두 turn_sequence 오름차순으로 통일 |
+| 4 | 로그인 응답 확장 | `email`, `name`, `type`, `profileUrl` 추가 |
+| 5 | 회원가입 응답 확장 | `type`, `profileUrl` 추가 |
+| 6 | SSE 에러 규칙 명확화 | 스트리밍 전/후 에러 응답 형식 규칙 명시 |
+| 7 | senderType 변경 | `AI` → `ASSISTANT` (LLM API role 명칭 통일) |

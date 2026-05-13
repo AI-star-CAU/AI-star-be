@@ -81,7 +81,7 @@ public class MessageService {
 
         Message aiMessage = Message.builder()
                 .turn(turn)
-                .senderType(SenderType.AI)
+                .senderType(SenderType.ASSISTANT)
                 .status(MessageStatus.STREAMING)
                 .build();
         messageRepository.save(aiMessage);
@@ -203,7 +203,7 @@ public class MessageService {
         }
 
         // 3. AI 메시지만 cancel 가능
-        if (message.getSenderType() != SenderType.AI) {
+        if (message.getSenderType() != SenderType.ASSISTANT) {
             throw new ProjectException(ErrorStatus.MESSAGE_CANCEL_NOT_ALLOWED);
         }
 

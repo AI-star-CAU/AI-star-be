@@ -14,6 +14,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 @Service
@@ -61,13 +63,24 @@ public class TurnService {
             turns = turns.subList(0, limit);
         }
 
+        // BACKWARD: DB에서 DESC로 가져왔으므로 ASC로 뒤집어서 응답
+        if (direction == CursorDirection.BACKWARD && turns.size() > 1) {
+            turns = new ArrayList<>(turns);
+            Collections.reverse(turns);
+        }
+
         List<TurnResDto.TurnItem> turnItems = turns.stream()
                 .map(TurnConverter::toTurnItem)
                 .toList();
 
+        // nextTurnSequence: BACKWARD → 가장 작은 값, FORWARD → 가장 큰 값
         Integer nextTurnSequence = null;
         if (hasMore && !turns.isEmpty()) {
-            nextTurnSequence = turns.get(turns.size() - 1).getTurnSequence();
+            if (direction == CursorDirection.BACKWARD) {
+                nextTurnSequence = turns.get(0).getTurnSequence();
+            } else {
+                nextTurnSequence = turns.get(turns.size() - 1).getTurnSequence();
+            }
         }
 
         return TurnResDto.TurnPage.builder()

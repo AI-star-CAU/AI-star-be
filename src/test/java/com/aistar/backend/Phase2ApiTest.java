@@ -123,7 +123,10 @@ class Phase2ApiTest {
                                 """))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.isSuccess").value(true))
-                .andExpect(jsonPath("$.result.accessToken").isNotEmpty());
+                .andExpect(jsonPath("$.result.accessToken").isNotEmpty())
+                .andExpect(jsonPath("$.result.email").value("login@test.com"))
+                .andExpect(jsonPath("$.result.name").value("로그인유저"))
+                .andExpect(jsonPath("$.result.type").value("USER"));
     }
 
     @Test
@@ -184,17 +187,27 @@ class Phase2ApiTest {
     }
 
     @Test
-    @DisplayName("대화 목록 조회 성공")
+    @DisplayName("대화 목록 조회 성공 — turnCount, lastMessagePreview 포함")
     void getChatList_success() throws Exception {
         Member member = createMember("list@test.com", "목록유저");
-        createChat(member);
-        createChat(member);
+        Chat chat = createChat(member);
+        MessageService.TurnContext ctx = createTurn(member, chat, "안녕하세요");
+
+        // AI 메시지 완료 처리 (preview에 content가 잡히도록)
+        Message aiMsg = messageRepository.findById(ctx.aiMessage().getId()).orElseThrow();
+        aiMsg.updateStatus(MessageStatus.COMPLETED);
+        aiMsg.updateContent("안녕하세요, 무엇을 도와드릴까요?");
+        em.flush();
+        em.clear();
 
         mockMvc.perform(get("/chats")
                         .header("Authorization", "Bearer " + tokenFor(member)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.isSuccess").value(true))
-                .andExpect(jsonPath("$.result.content.length()").value(2));
+                .andExpect(jsonPath("$.result.content.length()").value(1))
+                .andExpect(jsonPath("$.result.content[0].turnCount").value(1))
+                .andExpect(jsonPath("$.result.content[0].lastMessageAt").isNotEmpty())
+                .andExpect(jsonPath("$.result.content[0].lastMessagePreview").value("안녕하세요, 무엇을 도와드릴까요?"));
     }
 
     @Test
@@ -214,19 +227,27 @@ class Phase2ApiTest {
     // ── 4. Turn ──
 
     @Test
-    @DisplayName("턴 목록 조회 성공")
+    @DisplayName("턴 목록 조회 성공 — ASC 순서, senderType=ASSISTANT")
     void getTurns_success() throws Exception {
         Member member = createMember("turn@test.com", "턴유저");
         Chat chat = createChat(member);
 
         createTurn(member, chat, "첫 번째 질문");
         createTurn(member, chat, "두 번째 질문");
+        em.flush();
+        em.clear(); // 영속성 컨텍스트 초기화 → 턴 재조회 시 messages lazy loading 정상 작동
 
         mockMvc.perform(get("/chats/" + chat.getId() + "/turns")
                         .header("Authorization", "Bearer " + tokenFor(member)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.isSuccess").value(true))
-                .andExpect(jsonPath("$.result.turns.length()").value(2));
+                .andExpect(jsonPath("$.result.turns.length()").value(2))
+                // ASC 순서: 첫 번째 턴이 [0]
+                .andExpect(jsonPath("$.result.turns[0].turnSequence").value(1))
+                .andExpect(jsonPath("$.result.turns[1].turnSequence").value(2))
+                // senderType 확인
+                .andExpect(jsonPath("$.result.turns[0].messages[0].senderType").value("USER"))
+                .andExpect(jsonPath("$.result.turns[0].messages[1].senderType").value("ASSISTANT"));
     }
 
     @Test
@@ -288,7 +309,7 @@ class Phase2ApiTest {
         assertThat(userMsg.getStatus()).isEqualTo(MessageStatus.COMPLETED);
 
         Message aiMsg = messageRepository.findById(ctx.aiMessage().getId()).orElseThrow();
-        assertThat(aiMsg.getSenderType()).isEqualTo(SenderType.AI);
+        assertThat(aiMsg.getSenderType()).isEqualTo(SenderType.ASSISTANT);
         assertThat(aiMsg.getStatus()).isEqualTo(MessageStatus.STREAMING);
     }
 

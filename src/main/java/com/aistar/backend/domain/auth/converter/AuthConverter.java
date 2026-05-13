@@ -10,6 +10,8 @@ public class AuthConverter {
                 .memberId(member.getId())
                 .email(member.getEmail())
                 .name(member.getName())
+                .type(member.getType())
+                .profileUrl(member.getProfileUrl())
                 .accessToken(accessToken)
                 .build();
     }
@@ -17,6 +19,10 @@ public class AuthConverter {
     public static AuthResDto.Login toLogin(Member member, String accessToken) {
         return AuthResDto.Login.builder()
                 .memberId(member.getId())
+                .email(member.getEmail())
+                .name(member.getName())
+                .type(member.getType())
+                .profileUrl(member.getProfileUrl())
                 .accessToken(accessToken)
                 .build();
     }

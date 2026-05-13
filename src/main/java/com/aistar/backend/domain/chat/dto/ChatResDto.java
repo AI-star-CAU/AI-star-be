@@ -24,6 +24,9 @@ public class ChatResDto {
     public record ListItem(
             Long chatId,
             String title,
+            String lastMessagePreview,
+            Integer turnCount,
+            LocalDateTime lastMessageAt,
             LlmProvider llmProvider,
             LlmModel llmModel,
             LocalDateTime createdAt,
