@@ -153,11 +153,23 @@ public class MessageService {
                 sendDoneAndComplete(emitter);
 
             } catch (CancelException e) {
-                // cancel API에서 이미 content 저장 + status 변경 처리했으므로 SSE만 종료
+                String partialContent = streamCtx.contentBuffer().toString();
+                Integer partialToken = partialContent.isEmpty() ? null : partialContent.split("\\s+").length;
+
                 transactionTemplate.executeWithoutResult(status -> {
                     Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
                     chat.touchUpdatedAt();
                 });
+
+                try {
+                    sendEvent(emitter, "cancelled", MessageResDto.CancelResult.builder()
+                            .messageId(aiMessageId)
+                            .status(MessageStatus.CANCELED)
+                            .content(partialContent.isEmpty() ? null : partialContent)
+                            .answerToken(partialToken)
+                            .build());
+                } catch (IOException ignored) {
+                }
                 sendDoneAndComplete(emitter);
 
             } catch (Exception e) {

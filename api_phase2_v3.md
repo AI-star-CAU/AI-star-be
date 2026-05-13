@@ -773,9 +773,26 @@ data: {}
 | `chunk` | `{text: String}` | content 누적 (status 그대로) |
 | `turn_completed` | `{aiMessageId: Long, summary: String, answerToken: Integer}` | assistant 메시지 `STREAMING` → `COMPLETED` |
 | `error` | `{code: String, message: String, retryable: Boolean}` | assistant 메시지 `STREAMING` → `FAILED` |
+| `cancelled` | `{messageId: Long, status: "CANCELED", content: String?, answerToken: Integer?}` | assistant 메시지 `STREAMING` → `CANCELED` |
 | `done` | `{}` | (종료 신호) 모든 종료 경로에서 스트림 닫기 직전 전송 |
 
-> **`done` 이벤트**: 성공(`turn_completed`), 실패(`error`), 취소 모든 경우에 마지막으로 전송된다. 프론트엔드는 `done` 수신 여부로 정상 종료 vs 네트워크 끊김을 구분할 수 있다. `done`이 오지 않고 연결이 끊기면 네트워크 오류로 간주한다.
+**이벤트 순서 규칙**
+
+`turn_completed` / `error` / `cancelled` 중 **정확히 하나**가 terminal event 로 전송되고, 그 뒤에 반드시 `done` 이 온다.
+
+```
+성공:  turn_started → chunk* → turn_completed → done
+에러:  turn_started → chunk* → error           → done
+취소:  turn_started → chunk* → cancelled       → done
+```
+
+> **프론트엔드 구현 규칙:**
+> 1. `turn_completed` → 성공 상태로 전환
+> 2. `error` → 에러 상태로 전환, `retryable` 확인
+> 3. `cancelled` → 취소 상태로 전환, 부분 content 표시
+> 4. 위 3개는 상태 변경용. **연결 정리는 `done` 까지 대기**
+> 5. `done` 수신 → 연결 정리 (EventSource close 등)
+> 6. `done` 없이 연결 끊김 → 네트워크 오류로 간주
 
 **에러 응답 규칙**
 
