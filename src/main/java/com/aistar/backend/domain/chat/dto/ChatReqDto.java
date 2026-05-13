@@ -9,10 +9,10 @@ public class ChatReqDto {
     public record Create(
             String title,
 
-            @NotNull
+            @NotNull(message = "LLM 제공자는 필수입니다.")
             LlmProvider llmProvider,
 
-            @NotNull
+            @NotNull(message = "LLM 모델은 필수입니다.")
             LlmModel llmModel
     ) {}
 }

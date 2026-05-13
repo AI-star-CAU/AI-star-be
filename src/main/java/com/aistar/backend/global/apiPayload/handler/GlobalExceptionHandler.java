@@ -9,6 +9,8 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+import java.util.Map;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestControllerAdvice
@@ -24,10 +26,13 @@ public class GlobalExceptionHandler {
 
     // @Valid 검증 실패 (이메일 형식, 비밀번호 길이 등)
     @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ApiResponse<Void>> handleValidation(MethodArgumentNotValidException e) {
+    public ResponseEntity<ApiResponse<Map<String, String>>> handleValidation(MethodArgumentNotValidException e) {
         BaseErrorCode code = ErrorStatus.INVALID_INPUT;
+        Map<String, String> errors = new java.util.LinkedHashMap<>();
+        e.getBindingResult().getFieldErrors()
+                .forEach(err -> errors.put(err.getField(), err.getDefaultMessage()));
         return ResponseEntity.status(code.getStatus())
-                .body(ApiResponse.onFailure(code, null));
+                .body(ApiResponse.onFailure(code, errors));
     }
 
     // JSON 파싱 실패 / request body enum 변환 실패 등
