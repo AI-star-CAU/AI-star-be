@@ -62,7 +62,9 @@ out/
 .vscode/
 
 application.yml
+!src/test/resources/application.yml
 
 .env
+data/
 
 *.xlsx
