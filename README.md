@@ -28,7 +28,26 @@ cd AI-star-be
 cp src/main/resources/application.example.yml src/main/resources/application.yml
 ```
 
-필수 설정:
+`application.yml` 안의 `${...}` 값은 환경변수 참조입니다.
+환경변수로 주입하지 않을 경우에는 아래처럼 실제 값을 직접 적어야 합니다.
+
+```yaml
+spring:
+  datasource:
+    url: jdbc:h2:file:./data/ai-star;MODE=MySQL;DATABASE_TO_LOWER=TRUE
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+jwt:
+  secret: local-development-jwt-secret-key-32bytes-minimum
+  expiration: 3600000
+```
+
+`jwt.secret`은 최소 32바이트 이상의 값을 사용해야 합니다.
+실제 운영 secret은 절대 README, GitHub, 이슈, PR에 올리지 않습니다.
+
+환경변수로 관리할 수 있는 설정:
 
 | 설정 | 설명 |
 | --- | --- |
@@ -38,7 +57,7 @@ cp src/main/resources/application.example.yml src/main/resources/application.yml
 | `JWT_SECRET` | JWT 서명용 secret. HS256 기준 32바이트 이상 권장 |
 | `JWT_EXPIRATION` | JWT 만료 시간(ms). 기본값 `3600000` |
 
-환경변수로도 실행할 수 있습니다.
+MySQL을 환경변수로 지정해서 실행할 수도 있습니다.
 
 ```bash
 SPRING_DATASOURCE_URL='jdbc:mysql://localhost:3306/aistar' \
