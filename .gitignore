@@ -61,8 +61,7 @@ out/
 ### VS Code ###
 .vscode/
 
-application.yml
-
+CLAUDE.md
 .env
 
 *.xlsx

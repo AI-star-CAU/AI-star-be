@@ -1,0 +1,38 @@
+server:
+  servlet:
+    context-path: /api/v1
+
+spring:
+  application:
+    name: ai-star-server
+  datasource:
+    url: jdbc:mysql://localhost:3306/ait?useSSL=false&serverTimezone=Asia/Seoul&characterEncoding=UTF-8
+    username: ${db.username}
+    password: ${db.password}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+    show-sql: true
+
+jwt:
+  secret: ${JWT_SECRET:defaultSecretKeyForDevelopmentOnlyMustBeAtLeast256Bits!!}
+  expiration: 43200000  # 12시간 (ms)
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui
+  api-docs:
+    path: /api-docs
+
+aws:
+  access-key: ABCDEF
+  secret-key: GHIJKL
+
+db:
+  username: root
+  password: 1234
