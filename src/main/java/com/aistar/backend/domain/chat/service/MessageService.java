@@ -150,7 +150,7 @@ public class MessageService {
                         .answerToken(answerToken)
                         .build());
 
-                emitter.complete();
+                sendDoneAndComplete(emitter);
 
             } catch (CancelException e) {
                 // cancel API에서 이미 content 저장 + status 변경 처리했으므로 SSE만 종료
@@ -158,7 +158,7 @@ public class MessageService {
                     Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
                     chat.touchUpdatedAt();
                 });
-                emitter.complete();
+                sendDoneAndComplete(emitter);
 
             } catch (Exception e) {
                 log.error("SSE 스트리밍 실패", e);
@@ -173,9 +173,10 @@ public class MessageService {
                             .code(ErrorStatus.LLM_CALL_FAILED.getCode())
                             .message(ErrorStatus.LLM_CALL_FAILED.getMessage())
                             .build());
+                    sendDoneAndComplete(emitter);
                 } catch (IOException ignored) {
+                    emitter.completeWithError(e);
                 }
-                emitter.completeWithError(e);
             } finally {
                 streamingContexts.remove(aiMessageId);
             }
@@ -251,6 +252,14 @@ public class MessageService {
     }
 
     // ── 내부 유틸 ──
+
+    private void sendDoneAndComplete(SseEmitter emitter) {
+        try {
+            sendEvent(emitter, "done", new MessageResDto.Done());
+        } catch (IOException ignored) {
+        }
+        emitter.complete();
+    }
 
     private void sendEvent(SseEmitter emitter, String eventName, Object data) throws IOException {
         emitter.send(SseEmitter.event()

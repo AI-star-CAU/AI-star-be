@@ -38,6 +38,8 @@ https://api.ait.example.com/api/v1
 
 > 대화 생성(`POST /chats`)과 메시지 송신(`POST /chats/{chatId}/messages`)은 각각 JSON 응답과 SSE 스트리밍이라는 다른 응답 형식을 가지므로, 하나의 API 로 합치지 않는다.
 
+**빈 채팅 처리 정책:** `POST /chats` 성공 후 `POST /messages` 가 실패하면 메시지 없는 빈 채팅이 남을 수 있다. 클라이언트는 같은 `chatId` 로 메시지 전송을 재시도하거나, 대화 목록에서 `turnCount === 0` 인 항목을 숨길 수 있다. 백엔드는 Phase 2 에서 빈 채팅을 자동 삭제하지 않는다.
+
 ### 0.3 응답 형식 — `ApiResponse<T>` 단일 래퍼
 
 성공/실패 모두 같은 구조로 응답한다. 클라이언트는 단일 타입(`ApiResponse<T>`)으로 모든 응답을 파싱 가능.
@@ -252,7 +254,7 @@ Content-Type: application/json
 | `memberId` | Long | |
 | `email` | String | |
 | `name` | String | |
-| `type` | Enum<"USER" \| "ADMIN"> | 회원 종류 |
+| `type` | Enum<"USER" \| "ADMIN"> | 회원 종류 (USER: 일반 회원, ADMIN: 관리자) |
 | `profileUrl` | String? | 프로필 이미지 URL |
 | `accessToken` | String | JWT (12시간 유효) |
 
@@ -331,7 +333,7 @@ Authorization: Bearer <accessToken>
 | `email` | String | |
 | `name` | String | |
 | `profileUrl` | String? | 프로필 이미지 URL |
-| `type` | Enum<"USER" \| "ADMIN"> | 회원 종류 |
+| `type` | Enum<"USER" \| "ADMIN"> | 회원 종류 (USER: 일반 회원, ADMIN: 관리자) |
 | `createdAt` | DateTime | |
 
 ```json
@@ -466,7 +468,8 @@ Authorization: Bearer <accessToken>
 | `createdAt` | DateTime | |
 | `updatedAt` | DateTime | chat 자체 정보 수정 시각 |
 
-> `updatedAt` 은 chat 메타정보(제목 등)가 변경된 시각이며, `lastMessageAt` 은 마지막 대화 활동 시각이다. 현재 구현에서는 메시지 송신/취소 시 `updatedAt` 도 함께 갱신되므로 값이 유사할 수 있다.
+> `updatedAt` 은 chat 메타정보(제목 등)가 변경된 시각이며, `lastMessageAt` 은 마지막 대화 활동 시각이다. 현재 구현에서는 메시지 송신/취소 시 `updatedAt` 도 함께 갱신되므로 값이 유사할 수 있다.  
+> `lastMessageAt` 이 `null` 인 경우 (빈 채팅) 클라이언트는 `createdAt` 을 대체 표시하면 된다. 서버 정렬 기준은 `updatedAt` 이므로 `lastMessageAt` 이 null 이어도 정렬에는 영향 없다.
 
 ```json
 {
@@ -605,6 +608,15 @@ Authorization: Bearer <accessToken>
 | 채팅 첫 진입 | `cursor` 생략, `direction=BACKWARD` → 최신 20턴 받음 |
 | 위로 스크롤 (이전 보기) | 받은 응답의 `nextTurnSequence` 를 `lastTurnSequence` 로 보냄 |
 | 새 메시지 동기화 | 가장 최신 turn 의 `turnSequence` 를 `lastTurnSequence` 로 + `direction=FORWARD` |
+
+**프론트엔드 렌더링 규칙**
+
+응답 `turns` 배열은 항상 `turnSequence` 오름차순이다. 클라이언트는 다음과 같이 처리한다:
+
+| 방향 | 새 페이지 위치 | 설명 |
+|---|---|---|
+| `BACKWARD` | 기존 목록 **앞에 prepend** | 이전 메시지를 위로 쌓기 |
+| `FORWARD` | 기존 목록 **뒤에 append** | 새 메시지를 아래에 추가 |
 
 **응답 (200 OK)**
 
@@ -748,6 +760,9 @@ data: {"text": "ServletFilter "}
 
 event: turn_completed
 data: {"aiMessageId": 201, "summary": "Spring Security 필터 체인 동작 원리", "answerToken": 412}
+
+event: done
+data: {}
 ```
 
 **SSE 이벤트 타입 ↔ message.status 매핑**
@@ -757,7 +772,10 @@ data: {"aiMessageId": 201, "summary": "Spring Security 필터 체인 동작 원�
 | `turn_started` | `{turnId: Long, userMessageId: Long, aiMessageId: Long}` | user 메시지 `COMPLETED`, assistant 메시지 `STREAMING` 으로 생성 |
 | `chunk` | `{text: String}` | content 누적 (status 그대로) |
 | `turn_completed` | `{aiMessageId: Long, summary: String, answerToken: Integer}` | assistant 메시지 `STREAMING` → `COMPLETED` |
-| `error` | `{code: String, message: String}` | assistant 메시지 `STREAMING` → `FAILED` |
+| `error` | `{code: String, message: String, retryable: Boolean}` | assistant 메시지 `STREAMING` → `FAILED` |
+| `done` | `{}` | (종료 신호) 모든 종료 경로에서 스트림 닫기 직전 전송 |
+
+> **`done` 이벤트**: 성공(`turn_completed`), 실패(`error`), 취소 모든 경우에 마지막으로 전송된다. 프론트엔드는 `done` 수신 여부로 정상 종료 vs 네트워크 끊김을 구분할 수 있다. `done`이 오지 않고 연결이 끊기면 네트워크 오류로 간주한다.
 
 **에러 응답 규칙**
 
@@ -783,7 +801,10 @@ data: {"aiMessageId": 201, "summary": "Spring Security 필터 체인 동작 원�
 
 ```
 event: error
-data: {"code": "LLM_5001", "message": "LLM 서비스 호출에 실패했습니다."}
+data: {"code": "LLM_5001", "message": "LLM 서비스 호출에 실패했습니다.", "retryable": false}
+
+event: done
+data: {}
 ```
 
 > 프론트엔드 구현 규칙: HTTP 상태가 4xx/5xx 이면 JSON `ApiResponse` 파싱, HTTP 200 + `text/event-stream` 이면 SSE 이벤트 핸들러로 처리.
@@ -1083,3 +1104,8 @@ cancelButton.onclick = async () => {
 | 5 | 회원가입 응답 확장 | `type`, `profileUrl` 추가 |
 | 6 | SSE 에러 규칙 명확화 | 스트리밍 전/후 에러 응답 형식 규칙 명시 |
 | 7 | senderType 변경 | `AI` → `ASSISTANT` (LLM API role 명칭 통일) |
+| 8 | SSE `done` 이벤트 | 모든 종료 경로에서 `event: done` 전송 — 정상 종료 vs 네트워크 끊김 구분용 |
+| 9 | SSE `error` payload | `retryable` 필드 추가 |
+| 10 | 턴 목록 prepend/append | BACKWARD → prepend, FORWARD → append 규칙 명시 |
+| 11 | 빈 채팅 정책 | `POST /chats` 후 메시지 실패 시 빈 채팅 처리 정책 문서화 |
+| 12 | `lastMessageAt` null | null 시 `createdAt` 대체 표시 규칙 명시 |

@@ -27,8 +27,11 @@ public class MessageResDto {
     @Builder
     public record SseError(
             String code,
-            String message
+            String message,
+            boolean retryable
     ) {}
+
+    public record Done() {}
 
     @Builder
     public record CancelResult(
