@@ -17,32 +17,6 @@ git clone https://github.com/AI-star-CAU/AI-star-be.git
 cd AI-star-be
 ```
 
-### 2. 설정 파일 준비
-
-`src/main/resources/application.yml`은 DB 비밀번호, JWT secret 등 민감한 값을 포함할 수 있으므로 git에 커밋하지 않습니다.
-대신 저장소에는 예시 파일인 `src/main/resources/application.example.yml`만 포함되어 있습니다.
-
-로컬에서 실행할 때는 예시 파일을 복사한 뒤 실제 값을 채워 넣습니다.
-
-```bash
-cp src/main/resources/application.example.yml src/main/resources/application.yml
-```
-
-`application.yml` 안의 `${...}` 값은 환경변수 참조입니다.
-환경변수로 주입하지 않을 경우에는 아래처럼 실제 값을 직접 적어야 합니다.
-
-```yaml
-spring:
-  datasource:
-    url: jdbc:h2:file:./data/ai-star;MODE=MySQL;DATABASE_TO_LOWER=TRUE
-    username: sa
-    password:
-    driver-class-name: org.h2.Driver
-
-jwt:
-  secret: local-development-jwt-secret-key-32bytes-minimum
-  expiration: 3600000
-```
 
 `jwt.secret`은 최소 32바이트 이상의 값을 사용해야 합니다.
 실제 운영 secret은 절대 README, GitHub, 이슈, PR에 올리지 않습니다.
