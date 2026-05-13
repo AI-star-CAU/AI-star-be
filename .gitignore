@@ -62,3 +62,7 @@ out/
 .vscode/
 
 application.yml
+
+##others##
+.env
+CLAUDE.md

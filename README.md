@@ -41,3 +41,18 @@ java -jar build/libs/ai-star-server.jar
 - http://localhost:8080/hello
 
 - 3가지 기본 테스트용 엔드포인트 (method: GET)
+
+
+### 3. 데이터 베이스 설정 방법
+- .env 생성
+```
+  DB_USER=사용자명
+  DB_PW=db 비번
+  DB_URL=db url
+```
+![img_1.png](img_1.png)
+- 실행 -> 구성 편집
+-  환경 변수를 띄운 다음 옆에 폴더 모양을 눌러 .env 파일을 설정![img.png](img.png)
+
+
+- DB에 들어가 ```CREATE DATABASE AIT``` 실행
