@@ -17,46 +17,9 @@ git clone https://github.com/AI-star-CAU/AI-star-be.git
 cd AI-star-be
 ```
 
+### 2. 서버 실행
 
-`jwt.secret`은 최소 32바이트 이상의 값을 사용해야 합니다.
-실제 운영 secret은 절대 README, GitHub, 이슈, PR에 올리지 않습니다.
-
-환경변수로 관리할 수 있는 설정:
-
-| 설정 | 설명 |
-| --- | --- |
-| `SPRING_DATASOURCE_URL` | DB JDBC URL |
-| `SPRING_DATASOURCE_USERNAME` | DB 사용자명 |
-| `SPRING_DATASOURCE_PASSWORD` | DB 비밀번호 |
-| `JWT_SECRET` | JWT 서명용 secret. HS256 기준 32바이트 이상 권장 |
-| `JWT_EXPIRATION` | JWT 만료 시간(ms). 기본값 `3600000` |
-
-MySQL을 환경변수로 지정해서 실행할 수도 있습니다.
-
-```bash
-SPRING_DATASOURCE_URL='jdbc:mysql://localhost:3306/aistar' \
-SPRING_DATASOURCE_USERNAME='root' \
-SPRING_DATASOURCE_PASSWORD='password' \
-JWT_SECRET='your-32-bytes-or-longer-secret-key' \
-./gradlew bootRun
-```
-
-빌드된 jar를 실행할 때도 같은 설정이 필요합니다.
-
-```bash
-SPRING_DATASOURCE_URL='jdbc:mysql://localhost:3306/aistar' \
-SPRING_DATASOURCE_USERNAME='root' \
-SPRING_DATASOURCE_PASSWORD='password' \
-JWT_SECRET='your-32-bytes-or-longer-secret-key' \
-java -jar build/libs/ai-star-server.jar
-```
-
-테스트는 `src/test/resources/application.yml`의 인메모리 H2 DB와 테스트용 더미 JWT secret을 사용합니다.
-이 파일에는 실제 비밀값을 넣지 않습니다.
-
-### 3. 서버 실행
-
-#### Mac / Linux 
+#### Mac / Linux
 ```bash
 ./gradlew clean build
 java -jar build/libs/ai-star-server.jar
@@ -78,3 +41,18 @@ java -jar build/libs/ai-star-server.jar
 - http://localhost:8080/hello
 
 - 3가지 기본 테스트용 엔드포인트 (method: GET)
+
+
+### 3. 데이터 베이스 설정 방법
+- .env 생성
+```
+  DB_USER=사용자명
+  DB_PW=db 비번
+  DB_URL=db url
+```
+
+- 실행 -> 구성 편집
+- 환경 변수를 띄운 다음 옆에 폴더 모양을 눌러 .env 파일을 설정
+
+
+- DB에 들어가 ```CREATE DATABASE AIT``` 실행
