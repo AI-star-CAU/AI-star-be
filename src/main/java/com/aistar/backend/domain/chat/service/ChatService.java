@@ -78,10 +78,64 @@ public class ChatService {
     }
 
     @Transactional
-    public void deleteChat(Long memberId, Long chatId) {
+    public ChatResDto.Detail createBranch(Long memberId, Long chatId, ChatReqDto.BranchCreate dto) {
+        // 1. 부모 chat 검증
+        Chat parentChat = findChatOrThrow(chatId);
+        validateOwner(parentChat, memberId);
+
+        // 2. branchPointTurn 검증 (해당 chat에 속하는 turn인지)
+        turnRepository.findByIdAndChatId(dto.branchPointTurnId(), chatId)
+                .orElseThrow(() -> new ProjectException(ErrorStatus.BRANCH_INVALID));
+
+        // 3. 새 분기 chat 생성
+        boolean userProvidedTitle = dto.title() != null && !dto.title().isBlank();
+
+        Chat branch = Chat.builder()
+                .title(userProvidedTitle ? dto.title() : "새 분기")
+                .titleStatus(userProvidedTitle ? TitleStatus.USER_EDITED : TitleStatus.PENDING)
+                .llmProvider(parentChat.getLlmProvider())
+                .llmModel(parentChat.getLlmModel())
+                .member(parentChat.getMember())
+                .parentId(chatId)
+                .branchPointTurnId(dto.branchPointTurnId())
+                .rootChatId(parentChat.getRootChatId())
+                .build();
+
+        chatRepository.save(branch);
+
+        return ChatConverter.toDetail(branch);
+    }
+
+    @Transactional
+    public ChatResDto.Detail updateChatTitle(Long memberId, Long chatId, ChatReqDto.UpdateTitle dto) {
         Chat chat = findChatOrThrow(chatId);
         validateOwner(chat, memberId);
+        chat.updateTitle(dto.title());
+        return ChatConverter.toDetail(chat);
+    }
+
+    @Transactional
+    public void deleteChat(Long memberId, Long chatId) {
+        Chat chat = chatRepository.findById(chatId)
+                .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
+        validateOwner(chat, memberId);
+
+        if (chat.getDeletedAt() != null) {
+            throw new ProjectException(ErrorStatus.BRANCH_ALREADY_DELETED);
+        }
+
+        // cascade: 자손 chat도 함께 soft delete
+        softDeleteCascade(chat);
+    }
+
+    private void softDeleteCascade(Chat chat) {
         chat.softDelete();
+        List<Chat> children = chatRepository.findAllByParentId(chat.getId());
+        for (Chat child : children) {
+            if (child.getDeletedAt() == null) {
+                softDeleteCascade(child);
+            }
+        }
     }
 
     private Chat findChatOrThrow(Long chatId) {

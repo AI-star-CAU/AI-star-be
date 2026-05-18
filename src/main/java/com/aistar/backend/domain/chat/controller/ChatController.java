@@ -82,7 +82,30 @@ public class ChatController {
                         lastTurnSequence, limit, direction));
     }
 
-    @Operation(summary = "대화 삭제")
+    @Operation(summary = "분기 생성")
+    @PostMapping("/{chatId}/branches")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ApiResponse<ChatResDto.Detail> createBranch(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable Long chatId,
+            @RequestBody @Valid ChatReqDto.BranchCreate dto
+    ) {
+        return ApiResponse.onSuccess(SuccessStatus.CREATED,
+                chatService.createBranch(userDetails.getMember().getId(), chatId, dto));
+    }
+
+    @Operation(summary = "대화/분기 제목 수정")
+    @PatchMapping("/{chatId}")
+    public ApiResponse<ChatResDto.Detail> updateChatTitle(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable Long chatId,
+            @RequestBody @Valid ChatReqDto.UpdateTitle dto
+    ) {
+        return ApiResponse.onSuccess(SuccessStatus.OK,
+                chatService.updateChatTitle(userDetails.getMember().getId(), chatId, dto));
+    }
+
+    @Operation(summary = "대화 삭제 (cascade)")
     @DeleteMapping("/{chatId}")
     public ApiResponse<Void> deleteChat(
             @AuthenticationPrincipal CustomUserDetails userDetails,

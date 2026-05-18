@@ -27,4 +27,7 @@ public interface TurnRepository extends JpaRepository<Turn, Long> {
     // cursor 기반 페이징: FORWARD (미래로)
     List<Turn> findByChatIdAndTurnSequenceGreaterThanOrderByTurnSequenceAsc(
             Long chatId, int turnSequence, org.springframework.data.domain.Pageable pageable);
+
+    // 특정 turn 단건 조회
+    Optional<Turn> findByIdAndChatId(Long turnId, Long chatId);
 }
