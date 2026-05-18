@@ -31,6 +31,9 @@ public interface TurnRepository extends JpaRepository<Turn, Long> {
     // 특정 turn 단건 조회
     Optional<Turn> findByIdAndChatId(Long turnId, Long chatId);
 
+    // chat 내 특정 sequence의 turn 조회 (§4.1.1 분기점 결정용)
+    Optional<Turn> findByChatIdAndTurnSequence(Long chatId, int turnSequence);
+
     // frontier 존재 여부 확인
     boolean existsByChatIdAndTurnSequenceGreaterThan(Long chatId, int turnSequence);
 }

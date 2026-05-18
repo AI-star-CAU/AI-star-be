@@ -1,9 +1,18 @@
 package com.aistar.backend.domain.chat.dto;
 
 import com.aistar.backend.domain.chat.enums.MessageStatus;
+import com.aistar.backend.domain.chat.enums.TitleStatus;
 import lombok.Builder;
 
 public class MessageResDto {
+
+    @Builder
+    public record BranchCreated(
+            Long newChatId,
+            Long branchPointTurnId,
+            String title,
+            TitleStatus titleStatus
+    ) {}
 
     @Builder
     public record TurnStarted(

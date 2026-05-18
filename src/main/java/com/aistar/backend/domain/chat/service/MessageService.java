@@ -6,6 +6,7 @@ import com.aistar.backend.domain.chat.entity.Message;
 import com.aistar.backend.domain.chat.entity.Turn;
 import com.aistar.backend.domain.chat.enums.MessageStatus;
 import com.aistar.backend.domain.chat.enums.SenderType;
+import com.aistar.backend.domain.chat.enums.TitleStatus;
 import com.aistar.backend.domain.chat.repository.ChatRepository;
 import com.aistar.backend.domain.chat.repository.MessageRepository;
 import com.aistar.backend.domain.chat.repository.TurnRepository;
@@ -100,6 +101,11 @@ public class MessageService {
 
         Thread.startVirtualThread(() -> {
             try {
+                // 0. branch_created (재생성/수정 시)
+                if (ctx.branchCreated() != null) {
+                    sendEvent(emitter, "branch_created", ctx.branchCreated());
+                }
+
                 // 1. turn_started
                 sendEvent(emitter, "turn_started", MessageResDto.TurnStarted.builder()
                         .turnId(ctx.turn().getId())
@@ -264,6 +270,103 @@ public class MessageService {
                 .build();
     }
 
+    // ── 응답 재생성 (§4.1) ──
+
+    @Transactional
+    public TurnContext regenerateMessage(Long memberId, Long chatId, Long messageId) {
+        Chat chat = chatRepository.findByIdAndDeletedAtIsNull(chatId)
+                .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
+        if (!chat.getMember().getId().equals(memberId)) {
+            throw new ProjectException(ErrorStatus.FORBIDDEN);
+        }
+
+        Message message = messageRepository.findById(messageId)
+                .orElseThrow(() -> new ProjectException(ErrorStatus.MESSAGE_NOT_FOUND));
+        if (!message.getTurn().getChat().getId().equals(chatId)) {
+            throw new ProjectException(ErrorStatus.MESSAGE_NOT_FOUND);
+        }
+        if (message.getSenderType() != SenderType.ASSISTANT) {
+            throw new ProjectException(ErrorStatus.MESSAGE_ACTION_NOT_ALLOWED);
+        }
+        if (message.getStatus() == MessageStatus.STREAMING) {
+            throw new ProjectException(ErrorStatus.MESSAGE_ACTION_NOT_ALLOWED);
+        }
+
+        Turn targetTurn = message.getTurn();
+        Turn branchPointTurn = resolveBranchPoint(targetTurn, chat);
+
+        // 새 분기 생성
+        Chat branch = Chat.builder()
+                .title("새 분기")
+                .titleStatus(TitleStatus.PENDING)
+                .llmProvider(chat.getLlmProvider())
+                .llmModel(chat.getLlmModel())
+                .member(chat.getMember())
+                .parentId(branchPointTurn.getChat().getId())
+                .branchPointTurnId(branchPointTurn.getId())
+                .rootChatId(chat.getRootChatId())
+                .build();
+        chatRepository.save(branch);
+
+        // 원본 user 메시지 내용
+        String userContent = targetTurn.getMessages().stream()
+                .filter(m -> m.getSenderType() == SenderType.USER)
+                .findFirst()
+                .map(Message::getContent)
+                .orElseThrow(() -> new ProjectException(ErrorStatus.MESSAGE_ACTION_NOT_ALLOWED));
+
+        // 새 분기에 Turn + Messages 생성
+        Turn newTurn = Turn.builder()
+                .chat(branch)
+                .turnSequence(1)
+                .build();
+        turnRepository.save(newTurn);
+
+        Message newUserMessage = Message.builder()
+                .turn(newTurn)
+                .senderType(SenderType.USER)
+                .status(MessageStatus.COMPLETED)
+                .content(userContent)
+                .build();
+        messageRepository.save(newUserMessage);
+
+        Message newAiMessage = Message.builder()
+                .turn(newTurn)
+                .senderType(SenderType.ASSISTANT)
+                .status(MessageStatus.STREAMING)
+                .build();
+        messageRepository.save(newAiMessage);
+
+        MessageResDto.BranchCreated branchCreated = MessageResDto.BranchCreated.builder()
+                .newChatId(branch.getId())
+                .branchPointTurnId(branchPointTurn.getId())
+                .title(branch.getTitle())
+                .titleStatus(branch.getTitleStatus())
+                .build();
+
+        return new TurnContext(branch, newTurn, newUserMessage, newAiMessage, branchCreated);
+    }
+
+    // ── 분기점 결정 (§4.1.1) ──
+
+    private Turn resolveBranchPoint(Turn targetTurn, Chat chat) {
+        if (targetTurn.getTurnSequence() > 1) {
+            // Rule 1: 같은 chat의 직전 turn
+            return turnRepository.findByChatIdAndTurnSequence(
+                            chat.getId(), targetTurn.getTurnSequence() - 1)
+                    .orElseThrow(() -> new ProjectException(ErrorStatus.TURN_NOT_FOUND));
+        }
+
+        if (chat.getParentId() != null && chat.getBranchPointTurnId() != null) {
+            // Rule 2: 현재 chat이 branch → 부모의 branchPointTurn
+            return turnRepository.findById(chat.getBranchPointTurnId())
+                    .orElseThrow(() -> new ProjectException(ErrorStatus.TURN_NOT_FOUND));
+        }
+
+        // Rule 3: root의 첫 turn → 거부
+        throw new ProjectException(ErrorStatus.MESSAGE_ACTION_NOT_ALLOWED);
+    }
+
     // ── 비동기 summary 생성 ──
 
     private void generateSummaryAsync(Long turnId, String fullContent) {
@@ -297,7 +400,12 @@ public class MessageService {
                 .data(objectMapper.writeValueAsString(data)));
     }
 
-    public record TurnContext(Chat chat, Turn turn, Message userMessage, Message aiMessage) {}
+    public record TurnContext(Chat chat, Turn turn, Message userMessage, Message aiMessage,
+                               MessageResDto.BranchCreated branchCreated) {
+        TurnContext(Chat chat, Turn turn, Message userMessage, Message aiMessage) {
+            this(chat, turn, userMessage, aiMessage, null);
+        }
+    }
 
     private static class CancelException extends RuntimeException {}
 }

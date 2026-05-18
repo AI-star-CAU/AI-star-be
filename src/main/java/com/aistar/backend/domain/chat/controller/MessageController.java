@@ -39,6 +39,18 @@ public class MessageController {
         return messageService.streamMessage(ctx);
     }
 
+    @Operation(summary = "응답 재생성 (자동 분기)")
+    @PostMapping(value = "/{messageId}/regenerate", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter regenerateMessage(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable Long chatId,
+            @PathVariable Long messageId
+    ) {
+        Long memberId = userDetails.getMember().getId();
+        MessageService.TurnContext ctx = messageService.regenerateMessage(memberId, chatId, messageId);
+        return messageService.streamMessage(ctx);
+    }
+
     @Operation(summary = "메시지 스트리밍 취소")
     @PostMapping("/{messageId}/cancel")
     public ApiResponse<MessageResDto.CancelResult> cancelMessage(
