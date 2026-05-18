@@ -51,6 +51,19 @@ public class MessageController {
         return messageService.streamMessage(ctx);
     }
 
+    @Operation(summary = "메시지 수정 (자동 분기)")
+    @PatchMapping(value = "/{messageId}", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter editMessage(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable Long chatId,
+            @PathVariable Long messageId,
+            @RequestBody @Valid MessageReqDto.Send dto
+    ) {
+        Long memberId = userDetails.getMember().getId();
+        MessageService.TurnContext ctx = messageService.editMessage(memberId, chatId, messageId, dto.content());
+        return messageService.streamMessage(ctx);
+    }
+
     @Operation(summary = "메시지 스트리밍 취소")
     @PostMapping("/{messageId}/cancel")
     public ApiResponse<MessageResDto.CancelResult> cancelMessage(

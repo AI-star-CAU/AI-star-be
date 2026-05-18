@@ -295,19 +295,6 @@ public class MessageService {
         Turn targetTurn = message.getTurn();
         Turn branchPointTurn = resolveBranchPoint(targetTurn, chat);
 
-        // 새 분기 생성
-        Chat branch = Chat.builder()
-                .title("새 분기")
-                .titleStatus(TitleStatus.PENDING)
-                .llmProvider(chat.getLlmProvider())
-                .llmModel(chat.getLlmModel())
-                .member(chat.getMember())
-                .parentId(branchPointTurn.getChat().getId())
-                .branchPointTurnId(branchPointTurn.getId())
-                .rootChatId(chat.getRootChatId())
-                .build();
-        chatRepository.save(branch);
-
         // 원본 user 메시지 내용
         String userContent = targetTurn.getMessages().stream()
                 .filter(m -> m.getSenderType() == SenderType.USER)
@@ -315,7 +302,52 @@ public class MessageService {
                 .map(Message::getContent)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.MESSAGE_ACTION_NOT_ALLOWED));
 
-        // 새 분기에 Turn + Messages 생성
+        return createBranchTurn(chat, branchPointTurn, userContent);
+    }
+
+    // ── 메시지 수정 (§4.2) ──
+
+    @Transactional
+    public TurnContext editMessage(Long memberId, Long chatId, Long messageId, String content) {
+        Chat chat = chatRepository.findByIdAndDeletedAtIsNull(chatId)
+                .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
+        if (!chat.getMember().getId().equals(memberId)) {
+            throw new ProjectException(ErrorStatus.FORBIDDEN);
+        }
+
+        Message message = messageRepository.findById(messageId)
+                .orElseThrow(() -> new ProjectException(ErrorStatus.MESSAGE_NOT_FOUND));
+        if (!message.getTurn().getChat().getId().equals(chatId)) {
+            throw new ProjectException(ErrorStatus.MESSAGE_NOT_FOUND);
+        }
+        if (message.getSenderType() != SenderType.USER) {
+            throw new ProjectException(ErrorStatus.MESSAGE_ACTION_NOT_ALLOWED);
+        }
+        if (message.getStatus() == MessageStatus.STREAMING) {
+            throw new ProjectException(ErrorStatus.MESSAGE_ACTION_NOT_ALLOWED);
+        }
+
+        Turn targetTurn = message.getTurn();
+        Turn branchPointTurn = resolveBranchPoint(targetTurn, chat);
+
+        return createBranchTurn(chat, branchPointTurn, content);
+    }
+
+    // ── 분기 생성 공통 로직 ──
+
+    private TurnContext createBranchTurn(Chat sourceChat, Turn branchPointTurn, String userContent) {
+        Chat branch = Chat.builder()
+                .title("새 분기")
+                .titleStatus(TitleStatus.PENDING)
+                .llmProvider(sourceChat.getLlmProvider())
+                .llmModel(sourceChat.getLlmModel())
+                .member(sourceChat.getMember())
+                .parentId(branchPointTurn.getChat().getId())
+                .branchPointTurnId(branchPointTurn.getId())
+                .rootChatId(sourceChat.getRootChatId())
+                .build();
+        chatRepository.save(branch);
+
         Turn newTurn = Turn.builder()
                 .chat(branch)
                 .turnSequence(1)
