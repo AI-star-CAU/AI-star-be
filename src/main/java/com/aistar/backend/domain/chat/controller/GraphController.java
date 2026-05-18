@@ -33,4 +33,19 @@ public class GraphController {
                 graphService.getGraph(userDetails.getMember().getId(), chatId,
                         centerTurnId, up, down, includeDeleted));
     }
+
+    @Operation(summary = "그래프 윈도우 확장")
+    @GetMapping("/expand")
+    public ApiResponse<GraphResDto.ExpandResult> expandWindow(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable Long chatId,
+            @RequestParam Long fromTurnId,
+            @RequestParam String direction,
+            @RequestParam(defaultValue = "30") int limit,
+            @RequestParam(defaultValue = "false") boolean includeDeleted
+    ) {
+        return ApiResponse.onSuccess(SuccessStatus.OK,
+                graphService.expandWindow(userDetails.getMember().getId(), chatId,
+                        fromTurnId, direction, limit, includeDeleted));
+    }
 }

@@ -275,6 +275,92 @@ public class GraphService {
                 .build();
     }
 
+    // ── 윈도우 확장 (§3.2) ──
+
+    @Transactional(readOnly = true)
+    public GraphResDto.ExpandResult expandWindow(Long memberId, Long chatId,
+                                                   Long fromTurnId, String direction,
+                                                   int limit, boolean includeDeleted) {
+        if (limit < 1 || limit > 100) {
+            throw new ProjectException(ErrorStatus.GRAPH_INVALID_PARAM);
+        }
+        if (!"UP".equals(direction) && !"DOWN".equals(direction)) {
+            throw new ProjectException(ErrorStatus.GRAPH_INVALID_PARAM);
+        }
+
+        Chat pathChat = chatRepository.findByIdAndDeletedAtIsNull(chatId)
+                .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
+        validateOwner(pathChat, memberId);
+
+        Long rootChatId = pathChat.getRootChatId();
+
+        List<Chat> allChats = includeDeleted
+                ? chatRepository.findAllByRootChatId(rootChatId)
+                : chatRepository.findAllByRootChatIdAndDeletedAtIsNull(rootChatId);
+
+        Map<Long, Chat> chatMap = allChats.stream()
+                .collect(Collectors.toMap(Chat::getId, c -> c));
+
+        Turn fromTurn = turnRepository.findById(fromTurnId)
+                .orElseThrow(() -> new ProjectException(ErrorStatus.TURN_NOT_FOUND));
+
+        // fromTurnId가 트리에 속하는지 검증 (삭제된 chat 소속이면 chatMap에 없으므로 자동 차단)
+        if (!chatMap.containsKey(fromTurn.getChat().getId())) {
+            throw new ProjectException(ErrorStatus.GRAPH_INVALID_PARAM);
+        }
+
+        Map<Long, List<Chat>> branchPointMap = allChats.stream()
+                .filter(c -> c.getBranchPointTurnId() != null)
+                .collect(Collectors.groupingBy(Chat::getBranchPointTurnId));
+
+        List<Turn> turns;
+        GraphResDto.FrontierDto frontier;
+
+        if ("UP".equals(direction)) {
+            turns = traceUp(fromTurn, limit, chatMap);
+
+            List<GraphResDto.FrontierPoint> upFrontier = new ArrayList<>();
+            if (!turns.isEmpty()) {
+                Turn farthest = turns.get(turns.size() - 1);
+                boolean hasMore = farthest.getTurnSequence() > 1;
+                if (!hasMore) {
+                    Chat chat = chatMap.get(farthest.getChat().getId());
+                    hasMore = chat != null && chat.getParentId() != null;
+                }
+                upFrontier.add(GraphResDto.FrontierPoint.builder()
+                        .fromTurnId(farthest.getId()).hasMore(hasMore).build());
+            }
+            frontier = GraphResDto.FrontierDto.builder().up(upFrontier).down(List.of()).build();
+        } else {
+            turns = traceDown(fromTurn, limit, branchPointMap);
+
+            Map<Long, Turn> lastPerChat = new LinkedHashMap<>();
+            for (Turn t : turns) {
+                lastPerChat.merge(t.getChat().getId(), t,
+                        (a, b) -> b.getTurnSequence() > a.getTurnSequence() ? b : a);
+            }
+            List<GraphResDto.FrontierPoint> downFrontier = new ArrayList<>();
+            for (Turn lastTurn : lastPerChat.values()) {
+                boolean hasMore = turnRepository.existsByChatIdAndTurnSequenceGreaterThan(
+                        lastTurn.getChat().getId(), lastTurn.getTurnSequence());
+                downFrontier.add(GraphResDto.FrontierPoint.builder()
+                        .fromTurnId(lastTurn.getId()).hasMore(hasMore).build());
+            }
+            frontier = GraphResDto.FrontierDto.builder().up(List.of()).down(downFrontier).build();
+        }
+
+        // expand 응답의 isCurrent는 모두 false (centerTurnId = null)
+        List<GraphResDto.TurnNodeDto> turnNodes = turns.stream()
+                .map(t -> toTurnNodeDto(t, null, branchPointMap))
+                .toList();
+
+        return GraphResDto.ExpandResult.builder()
+                .direction(direction)
+                .turns(turnNodes)
+                .frontier(frontier)
+                .build();
+    }
+
     private void validateOwner(Chat chat, Long memberId) {
         if (!chat.getMember().getId().equals(memberId)) {
             throw new ProjectException(ErrorStatus.FORBIDDEN);
