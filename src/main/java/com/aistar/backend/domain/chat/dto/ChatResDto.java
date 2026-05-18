@@ -2,6 +2,7 @@ package com.aistar.backend.domain.chat.dto;
 
 import com.aistar.backend.domain.chat.enums.LlmModel;
 import com.aistar.backend.domain.chat.enums.LlmProvider;
+import com.aistar.backend.domain.chat.enums.TitleStatus;
 import lombok.Builder;
 
 import java.time.LocalDateTime;
@@ -13,7 +14,9 @@ public class ChatResDto {
             Long chatId,
             Long rootChatId,
             Long parentId,
+            Long branchPointTurnId,
             String title,
+            TitleStatus titleStatus,
             LlmProvider llmProvider,
             LlmModel llmModel,
             LocalDateTime createdAt,

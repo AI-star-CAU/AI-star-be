@@ -5,6 +5,7 @@ import com.aistar.backend.domain.chat.dto.ChatReqDto;
 import com.aistar.backend.domain.chat.dto.ChatResDto;
 import com.aistar.backend.domain.chat.entity.Chat;
 import com.aistar.backend.domain.chat.entity.Message;
+import com.aistar.backend.domain.chat.enums.TitleStatus;
 import com.aistar.backend.domain.chat.repository.ChatRepository;
 import com.aistar.backend.domain.chat.repository.MessageRepository;
 import com.aistar.backend.domain.chat.repository.TurnRepository;
@@ -38,6 +39,7 @@ public class ChatService {
 
         Chat chat = Chat.builder()
                 .title(dto.title() != null ? dto.title() : "제목없음")
+                .titleStatus(dto.title() != null ? TitleStatus.USER_EDITED : TitleStatus.PENDING)
                 .llmProvider(dto.llmProvider())
                 .llmModel(dto.llmModel())
                 .member(member)

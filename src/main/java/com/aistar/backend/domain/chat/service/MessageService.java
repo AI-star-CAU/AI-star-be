@@ -127,8 +127,6 @@ public class MessageService {
 
                 // 3. 완료 처리
                 String fullContent = streamCtx.contentBuffer().toString();
-                String summary = fullContent.length() > 50
-                        ? fullContent.substring(0, 50) : fullContent;
                 int answerToken = fullContent.split("\\s+").length;
 
                 transactionTemplate.executeWithoutResult(status -> {
@@ -138,19 +136,22 @@ public class MessageService {
                         message.updateStatus(MessageStatus.COMPLETED);
                         message.updateAnswerToken(answerToken);
                     }
-                    Turn turn = turnRepository.findById(ctx.turn().getId()).orElseThrow();
-                    turn.updateSummary(summary);
                     Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
+                    chat.updateLastTurnId(ctx.turn().getId());
                     chat.touchUpdatedAt();
                 });
 
                 sendEvent(emitter, "turn_completed", MessageResDto.TurnCompleted.builder()
+                        .turnId(ctx.turn().getId())
                         .aiMessageId(aiMessageId)
-                        .summary(summary)
                         .answerToken(answerToken)
+                        .summaryStatus("PENDING")
                         .build());
 
                 sendDoneAndComplete(emitter);
+
+                // 비동기 summary 생성
+                generateSummaryAsync(ctx.turn().getId(), fullContent);
 
             } catch (CancelException e) {
                 String partialContent = streamCtx.contentBuffer().toString();
@@ -261,6 +262,23 @@ public class MessageService {
                 .content(partialContent)
                 .answerToken(partialToken)
                 .build();
+    }
+
+    // ── 비동기 summary 생성 ──
+
+    private void generateSummaryAsync(Long turnId, String fullContent) {
+        Thread.startVirtualThread(() -> {
+            try {
+                String summary = fullContent.length() > 50
+                        ? fullContent.substring(0, 50) : fullContent;
+                transactionTemplate.executeWithoutResult(status -> {
+                    Turn turn = turnRepository.findById(turnId).orElseThrow();
+                    turn.updateSummary(summary);
+                });
+            } catch (Exception e) {
+                log.error("Summary 생성 실패 turnId={}", turnId, e);
+            }
+        });
     }
 
     // ── 내부 유틸 ──

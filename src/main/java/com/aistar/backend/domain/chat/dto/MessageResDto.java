@@ -19,9 +19,10 @@ public class MessageResDto {
 
     @Builder
     public record TurnCompleted(
+            Long turnId,
             Long aiMessageId,
-            String summary,
-            Integer answerToken
+            Integer answerToken,
+            String summaryStatus
     ) {}
 
     @Builder
