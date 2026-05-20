@@ -1,5 +1,7 @@
 package com.aistar.backend.domain.chat.service;
 
+import com.aistar.backend.ai.AiServerClient;
+import com.aistar.backend.ai.dto.AiChatRequest;
 import com.aistar.backend.domain.chat.dto.MessageResDto;
 import com.aistar.backend.domain.chat.entity.Chat;
 import com.aistar.backend.domain.chat.entity.Message;
@@ -10,7 +12,6 @@ import com.aistar.backend.domain.chat.enums.TitleStatus;
 import com.aistar.backend.domain.chat.repository.ChatRepository;
 import com.aistar.backend.domain.chat.repository.MessageRepository;
 import com.aistar.backend.domain.chat.repository.TurnRepository;
-import com.aistar.backend.domain.llm.client.LlmClient;
 import com.aistar.backend.global.apiPayload.code.ErrorStatus;
 import com.aistar.backend.global.apiPayload.exception.ProjectException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -34,7 +35,7 @@ public class MessageService {
     private final ChatRepository chatRepository;
     private final TurnRepository turnRepository;
     private final MessageRepository messageRepository;
-    private final LlmClient llmClient;
+    private final AiServerClient aiServerClient;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
 
@@ -114,10 +115,15 @@ public class MessageService {
                         .aiMessageId(aiMessageId)
                         .build());
 
-                // 2. LLM 스트리밍
-                llmClient.streamCompletion(
-                        ctx.chat().getLlmModel().getModelId(),
-                        ctx.userMessage().getContent(),
+                // 2. AI server streaming
+                aiServerClient.streamChatCompletion(
+                        new AiChatRequest(
+                                ctx.userMessage().getContent(),
+                                512,
+                                0.7,
+                                null,
+                                null
+                        ),
                         chunk -> {
                             if (streamCtx.canceled().get()) {
                                 throw new CancelException();

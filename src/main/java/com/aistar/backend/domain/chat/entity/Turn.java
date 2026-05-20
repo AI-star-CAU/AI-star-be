@@ -13,7 +13,7 @@ import java.util.List;
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 @Table(name = "turn", indexes = {
-        @Index(name = "idx_turn_chat_sequence", columnList = "chat_id, turn_sequence")
+        @Index(name = "idx_turn_chat_sequence", columnList = "aichat_session_id, turn_sequence")
 })
 public class Turn {
 
@@ -33,7 +33,7 @@ public class Turn {
     private LocalDateTime createdAt = LocalDateTime.now();
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "chat_id", nullable = false)
+    @JoinColumn(name = "aichat_session_id", nullable = false)
     private Chat chat;
 
     @OneToMany(mappedBy = "turn")
