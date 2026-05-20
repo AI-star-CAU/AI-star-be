@@ -630,5 +630,4 @@ CREATE INDEX idx_message_turn       ON message(turn_id);
 | 항목 | 사유 |
 |------|------|
 | `UsageRecord` 엔티티 | ERD에 정의되어 있으나 Phase 3까지 필요한 기능 없음 |
-| `POST /chats/{chatId}/restore` | 복구 API — 우선순위 낮음으로 보류 |
 | LLM 실제 연동 | MockLlmClient 사용 중, 실제 API 키 연동은 별도 진행 |
