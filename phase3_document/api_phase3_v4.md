@@ -34,7 +34,6 @@ Phase 2 명세서(`API-AIT-P2`)의 §0 공통 컨벤션을 그대로 따른다. 
 | 404 | `BRANCH_4041` | 존재하지 않는 분기입니다. |
 | 404 | `TURN_4041` | 존재하지 않는 turn입니다. |
 | 409 | `BRANCH_4091` | 이미 삭제된 분기입니다. |
-| 409 | `BRANCH_4092` | 복구 기간이 만료된 분기입니다. |
 | 409 | `MESSAGE_4092` | 수정/재생성할 수 없는 상태의 메시지입니다. |
 
 기존 `CHAT_4041`, `MESSAGE_4041`, `MESSAGE_4091` 등은 Phase 2와 동일하게 사용한다.
@@ -346,7 +345,6 @@ Authorization: Bearer <accessToken>
 
 1. 대상 chat 및 모든 자손 chat에 대해 `deleted_at`을 동일한 시각으로 채운다.
 2. 삭제된 chat의 turn·message는 별도 삭제하지 않는다 (FR-6.1 데이터 보존).
-3. 복구 가능 기간(FR-2.5)을 위한 정책은 별도 배치잡으로 관리한다.
 
 **에러**
 
@@ -356,55 +354,6 @@ Authorization: Bearer <accessToken>
 | 403 | `COMMON_403` | |
 | 404 | `CHAT_4041` | |
 | 409 | `BRANCH_4091` | 이미 삭제된 chat |
-
-**관련 FR:** FR-2.5
-
----
-
-### 2.4 분기 복구
-
-```http
-POST /api/v1/chats/{chatId}/restore
-Authorization: Bearer <accessToken>
-```
-
-**인증 필요:** ✓
-
-소프트 삭제된 분기를 복원한다. 자손 분기도 함께 복원된다.
-
-**Path Parameters**
-
-| 파라미터 | 타입 | 설명 |
-|---|---|---|
-| `chatId` | Long | |
-
-**요청 본문:** 없음
-
-**응답 (200 OK)**
-
-`result` 필드는 §2.1의 응답 본문과 동일한 chat 정보.
-
-**처리 규칙**
-
-1. 대상 chat과 모든 **자손 chat**을 함께 복원한다 (cascade 복구).
-2. **부모 chat이 삭제 상태이면 단독 복구를 거부한다**. `409 Conflict` + `BRANCH_4091` 반환. 사용자는 더 상위의 삭제된 조상부터 복구해야 한다.
-   ```
-   예시:
-     A 삭제 → B 삭제 → C 삭제 인 상황에서
-     C만 복구 요청 → BRANCH_4091 (부모 B가 삭제 상태)
-     A 복구 요청 → 성공. A, B, C 모두 함께 복구됨.
-   ```
-3. 복구 가능 기간(예: 30일) 안에만 가능. 만료 시 `BRANCH_4092` 반환. 정확한 기간 정책은 별도 결정.
-
-**에러**
-
-| HTTP | code | 시점 |
-|---|---|---|
-| 401 | `AUTH_4011` | |
-| 403 | `COMMON_403` | |
-| 404 | `CHAT_4041` | |
-| 409 | `BRANCH_4091` | 부모 chat이 삭제 상태 (부모부터 복구 필요) |
-| 409 | `BRANCH_4092` | 복구 기간 만료 |
 
 **관련 FR:** FR-2.5
 
@@ -992,13 +941,10 @@ Phase 2 §4 ERD ↔ API 매핑에 다음을 추가한다.
 | GET | `/api/v1/chats/{chatId}/graph/expand` | 윈도우 확장 | ✓ | FR-3.2, FR-3.5 | 필수 |
 | POST | `/api/v1/chats/{chatId}/messages/{messageId}/regenerate` | 응답 재생성 (덮어쓰기) | ✓ | FR-1.4 | 필수 |
 | PATCH | `/api/v1/chats/{chatId}/messages/{messageId}` | 메시지 수정 (자동 분기) | ✓ | FR-1.5 | 필수 |
-| POST | `/api/v1/chats/{chatId}/restore` | 분기 복구 | ✓ | FR-2.5 | 보류 가능 |
-
-총 8개 엔드포인트. Phase 2의 11개와 합쳐 누적 19개.
+총 7개 엔드포인트. Phase 2의 11개와 합쳐 누적 18개.
 
 **우선순위 정책:**
 - **필수**: Phase 3 발표·통합 테스트 통과를 위해 반드시 구현되어야 하는 엔드포인트.
-- **보류 가능**: 시간이 부족하면 Phase 4로 이연 가능. 단 `DELETE`는 soft delete로 구현되므로 데이터 손실은 없음.
 
 **Phase 2와의 변경:**
 - `DELETE /chats/{chatId}` — Phase 2의 보조 기능이 Phase 3에서 cascade 처리 추가로 정식 승격. 경로는 동일.
@@ -1030,10 +976,9 @@ Phase 2 §4 ERD ↔ API 매핑에 다음을 추가한다.
 1. **비동기 작업 완료 통보 방식** — 현재는 polling 기반(다음 graph 조회 시 반영). WebSocket/SSE push는 Phase 4에서 결정.
 2. **summary 길이 컷** — DB에는 전체 summary를 저장하고 API 응답 시 60자 컷을 적용. 정확한 임계값은 통합 테스트로 조정.
 3. **window 기본 크기** — `up=30, down=30`은 초기값. NFR-P-2 측정 결과로 조정.
-4. **분기 복구 기간** — 정확한 일수는 Phase 4 정책 수립 시 결정.
-5. **`POST /chats` 응답 필드 확장** — Phase 2 응답에 `titleStatus`, `lastTurnId`를 추가할지 여부. 본 명세는 Phase 3에서 신설되는 응답에서만 신규 컬럼을 노출한다. Phase 2의 기존 응답 확장은 별도 결정.
-6. **FR-2.4 (부모 분기로 돌아가기) 구현 방식** — 별도 엔드포인트 없이 graph 응답의 `chats[].parentChatId` / `branchPointTurnId`를 활용해 클라이언트에서 처리. 빈번한 사용 패턴이 확인되면 후속 Phase에서 편의 API 추가 검토.
-7. **Phase 2 `turn_completed` SSE 마이그레이션** — Phase 3에서 비동기 summary 원칙을 도입하면서 SSE 스키마가 변경됨. Phase 2의 일반 메시지 송신 API에도 동일 스키마 적용이 필요하며, Phase 2 코드 수정 일정은 별도 합의.
+4. **`POST /chats` 응답 필드 확장** — Phase 2 응답에 `titleStatus`, `lastTurnId`를 추가할지 여부. 본 명세는 Phase 3에서 신설되는 응답에서만 신규 컬럼을 노출한다. Phase 2의 기존 응답 확장은 별도 결정.
+5. **FR-2.4 (부모 분기로 돌아가기) 구현 방식** — 별도 엔드포인트 없이 graph 응답의 `chats[].parentChatId` / `branchPointTurnId`를 활용해 클라이언트에서 처리. 빈번한 사용 패턴이 확인되면 후속 Phase에서 편의 API 추가 검토.
+6. **Phase 2 `turn_completed` SSE 마이그레이션** — Phase 3에서 비동기 summary 원칙을 도입하면서 SSE 스키마가 변경됨. Phase 2의 일반 메시지 송신 API에도 동일 스키마 적용이 필요하며, Phase 2 코드 수정 일정은 별도 합의.
 
 ---
 
