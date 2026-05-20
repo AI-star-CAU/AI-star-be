@@ -1,8 +1,8 @@
 # Phase 3 API 명세서
 
 **문서 식별자:** API-AIT-P3  
-**버전:** 0.5  
-**작성일:** 2026-05-18 
+**버전:** 0.6  
+**작성일:** 2026-05-20 
 **대상 Phase:** Phase 3 (W12~W13) — 분기 관리 + 그래프 시각화  
 **범위:** FG-2 분기 관리, FG-3 그래프 시각화, FR-1.4 응답 재생성, FR-1.5 사용자 메시지 수정  
 **기준 ERD:** `ait_erd_v2.1` (Phase 3 보강 반영)  
@@ -739,12 +739,9 @@ Accept: text/event-stream
 4. 해당 branchPoint를 기준으로 새 분기 자동 생성
 5. 새 분기 안에서 user 메시지 재기록 + LLM 응답 스트리밍
 
-SSE 이벤트 시퀀스는 Phase 2 §2.5의 메시지 송신과 동일한 패턴을 따르되, 시작 이벤트에 새 분기 정보가 포함된다.
+SSE 이벤트 시퀀스는 Phase 2 §2.5의 메시지 송신과 동일한 패턴을 따른다. 재생성에서는 별도의 `branch_created` 이벤트를 전송하지 않는다.
 
 ```
-event: branch_created
-data: {"newChatId": 88, "branchPointTurnId": 104, "title": null, "titleStatus": "PENDING"}
-
 event: turn_started
 data: {"turnId": 200, "userMessageId": 400, "aiMessageId": 401}
 
@@ -766,7 +763,6 @@ data: {}
 
 | event | data 스키마 | 의미 |
 |---|---|---|
-| `branch_created` | `{newChatId: Long, branchPointTurnId: Long, title: String, titleStatus: Enum}` | **신규.** 분기 자동 생성 알림. 클라이언트는 그래프 갱신 |
 | `turn_completed` | `{turnId: Long, aiMessageId: Long, answerToken: Integer, summaryStatus: Enum<"PENDING">}` | **변경.** summary 필드 제거, summaryStatus 추가 |
 | 이외 | (Phase 2와 동일) | |
 
@@ -782,9 +778,9 @@ data: {}
 
 **프론트엔드 권장 흐름**
 
-1. `branch_created` 수신 → 그래프에 새 노드 즉시 추가, 현재 분기를 새 분기로 전환
-2. `turn_started`부터는 Phase 2와 동일하게 처리
-3. `done` 수신 후 그래프 재조회는 선택사항 (이미 새 노드는 반영됨)
+1. `turn_started`부터 Phase 2와 동일하게 처리
+2. `chunk*`를 누적해 assistant 메시지를 점진적으로 표시
+3. `done` 수신 후 messages/conversations/graph를 재조회해 서버 저장본으로 확정
 4. summary는 별도 polling 또는 다음 graph 조회 시 채워짐
 
 **에러 응답 규칙**
@@ -840,7 +836,7 @@ Content-Type: application/json
 
 **응답 (200 OK, `Content-Type: text/event-stream`)**
 
-SSE 흐름은 §4.1 응답 재생성과 동일. `branch_created` → `turn_started` → `chunk*` → `turn_completed` → `done`.
+SSE 흐름은 `branch_created` → `turn_started` → `chunk*` → `turn_completed` → `done`.
 
 차이점은 `turn_started`의 user 메시지가 수정된 내용으로 기록된다는 점이다.
 
@@ -932,8 +928,7 @@ SSE 흐름은 §4.1 응답 재생성과 동일. `branch_created` → `turn_start
    ← SSE 스트림 시작
 
 2. SSE 이벤트 시퀀스:
-   event: branch_created  → 그래프에 새 노드 즉시 추가
-   event: turn_started    → 새 분기에서 첫 응답 시작
+   event: turn_started    → 재생성 응답 시작
    event: chunk           → 점진적 표시
    ...
    event: turn_completed
@@ -1034,3 +1029,4 @@ Phase 2 §4 ERD ↔ API 매핑에 다음을 추가한다.
 | 0.3 | 2026-05-18 | 추가 리뷰 반영. Summary NULL/PENDING 정책 명시, window 밖 branch의 collapsed handle 렌더링 규칙 추가, 비동기 title worker의 USER_EDITED 덮어쓰기 방지 조건 추가, expand fromTurnId 검증 조건 보강. |
 | 0.4 | 2026-05-18 | ERD 컬럼명 정리 (`aichat_session_id` → `chat_id`, `Summary` → `summary`). collapsed handle 클릭 시 centerTurnId 결정 우선순위 명확화. collapsed 정보 계산 책임을 클라이언트로 명시. expand 에러 케이스 보강(`includeDeleted=false`인데 fromTurnId가 삭제된 chat에 속한 경우). 본문 가독성 개선: "골격" → "분기 구조/분기 메타데이터", "홉" → "단계"로 정리하고 일부 전공 용어에 괄호 풀이 추가. |
 | 0.5 | 2026-05-20 | `chat.title` nullable 정책 변경: `NOT NULL DEFAULT '제목없음'` → `NULL`. 제목 미지정·자동 생성 전 상태를 null로 표현하고 화면용 기본 문구("제목없음", "새 분기")는 DB에 저장하지 않음. ERD §1, 처리 흐름, 응답 예시 일괄 반영. |
+| 0.6 | 2026-05-20 | 응답 재생성 SSE 흐름에서 `branch_created` 이벤트를 제거. 재생성은 `turn_started` → `chunk*` → `turn_completed` → `done` 순서로 처리하며, 클라이언트는 `done` 이후 messages/conversations/graph를 재조회해 서버 저장본으로 확정하도록 정리. |
