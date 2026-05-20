@@ -27,6 +27,7 @@ public class TurnResDto {
 
     @Builder
     public record MessageItem(
+            Long chatId,
             Long messageId,
             SenderType senderType,
             MessageStatus status,

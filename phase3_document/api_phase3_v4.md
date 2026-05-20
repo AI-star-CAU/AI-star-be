@@ -1,7 +1,7 @@
 # Phase 3 API 명세서
 
 **문서 식별자:** API-AIT-P3  
-**버전:** 0.7  
+**버전:** 0.8  
 **작성일:** 2026-05-20 
 **대상 Phase:** Phase 3 (W12~W13) — 분기 관리 + 그래프 시각화  
 **범위:** FG-2 분기 관리, FG-3 그래프 시각화, FR-1.4 응답 재생성, FR-1.5 사용자 메시지 수정  
@@ -721,7 +721,7 @@ Accept: text/event-stream
 
 | 파라미터 | 타입 | 설명 |
 |---|---|---|
-| `chatId` | Long | assistant 메시지가 속한 chat |
+| `chatId` | Long | assistant 메시지가 **실제로 속한** chat ID. 분기 화면에서 부모 chat의 메시지를 재생성할 경우, 현재 보고 있는 분기 ID가 아닌 메시지의 원본 chat ID를 사용해야 한다. |
 | `messageId` | Long | 재생성 대상 assistant 메시지 ID |
 
 **요청 본문:** 없음
@@ -775,6 +775,8 @@ data: {}
 2. `chunk*`를 누적해 기존 assistant 메시지의 content를 교체하며 점진적으로 표시
 3. `done` 수신 후 messages를 재조회해 서버 저장본으로 확정
 4. summary는 별도 polling 또는 다음 graph 조회 시 채워짐
+
+> **분기 화면에서의 재생성:** 분기를 보면서 부모 chat의 메시지를 재생성하려면, path의 `chatId`에 현재 분기 ID가 아닌 **메시지의 원본 chatId**를 사용해야 한다. 원본 chatId는 `GET /chats/{chatId}/turns` 응답의 각 메시지에 포함된 `chatId` 필드에서 확인할 수 있다.
 
 **에러 응답 규칙**
 
@@ -969,6 +971,14 @@ Phase 2 §4 ERD ↔ API 매핑에 다음을 추가한다.
 | (응답 시점 계산) | `isCurrent` | DB 컬럼 없음. center 비교로 계산 |
 | (응답 시점 계산) | `summaryStatus` | summary 값이 NULL이면 PENDING. DB 기본 문구 저장 금지 |
 
+### message 테이블 → 응답 DTO (Phase 3 추가분)
+
+| ERD 컬럼 | API 필드 | 비고 |
+|---|---|---|
+| `turn.chat_id` | `chatId` | **신규 추가.** 메시지가 실제로 속한 chat ID. turn→chat 경유. 분기 화면에서 부모 chat의 메시지를 식별하기 위해 필요 |
+
+> Phase 2의 `GET /chats/{chatId}/turns` 응답에서 각 메시지 객체에 `chatId` 필드가 추가된다. 분기 화면에서 부모 chat의 메시지를 표시할 때, 프론트엔드는 이 `chatId`를 사용하여 재생성·수정 요청의 path를 정확하게 구성해야 한다.
+
 ---
 
 ## 8. Phase 3 엔드포인트 목록
@@ -993,6 +1003,7 @@ Phase 2 §4 ERD ↔ API 매핑에 다음을 추가한다.
 **Phase 2와의 변경:**
 - `DELETE /chats/{chatId}` — Phase 2의 보조 기능이 Phase 3에서 cascade 처리 추가로 정식 승격. 경로는 동일.
 - **`turn_completed` SSE 이벤트 스키마 변경** — Phase 2의 `summary` 필드 제거, `summaryStatus` 추가. Phase 2의 일반 메시지 송신 API에도 후속 마이그레이션 권장 (§4.1 참조).
+- **`GET /chats/{chatId}/turns` 메시지 응답에 `chatId` 필드 추가** — 분기 화면에서 부모 chat의 메시지를 재생성·수정할 때 정확한 chat ID를 사용하기 위해 필요. 기존 `messageId`, `senderType` 등과 함께 반환.
 
 ## 9. 성능 고려 (NFR-P-2)
 
@@ -1037,3 +1048,4 @@ Phase 2 §4 ERD ↔ API 매핑에 다음을 추가한다.
 | 0.5 | 2026-05-20 | `chat.title` nullable 정책 변경: `NOT NULL DEFAULT '제목없음'` → `NULL`. 제목 미지정·자동 생성 전 상태를 null로 표현하고 화면용 기본 문구("제목없음", "새 분기")는 DB에 저장하지 않음. ERD §1, 처리 흐름, 응답 예시 일괄 반영. |
 | 0.6 | 2026-05-20 | 응답 재생성 SSE 흐름에서 `branch_created` 이벤트를 제거. 재생성은 `turn_started` → `chunk*` → `turn_completed` → `done` 순서로 처리하며, 클라이언트는 `done` 이후 messages/conversations/graph를 재조회해 서버 저장본으로 확정하도록 정리. |
 | 0.7 | 2026-05-20 | 응답 재생성 방식 변경: 분기 생성 → **기존 AI 메시지 덮어쓰기**. 새 Turn/Chat을 생성하지 않고 같은 turn의 AI 메시지 content를 새 LLM 응답으로 교체. `turn_started` SSE 이벤트에 `chatId` 필드 추가. STREAMING 상태의 메시지에 재생성 요청 시 기존 스트리밍을 cancel하고 새로 시작하도록 변경 (에러 → 허용). §4.1.1 분기점 결정 규칙은 메시지 수정(§4.2)에만 적용되도록 범위 명확화. |
+| 0.8 | 2026-05-20 | `GET /chats/{chatId}/turns` 메시지 응답에 `chatId` 필드 추가. 분기 화면에서 부모 chat의 메시지를 재생성·수정할 때 메시지의 원본 chatId를 사용해야 하는 규칙 명시. §4.1 path parameter 설명 보강, §7 message 매핑 추가. |
