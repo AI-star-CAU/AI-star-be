@@ -31,14 +31,13 @@ gradlew clean build
 java -jar build/libs/ai-star-server.jar
 ```
 
-
 #### IntelliJ를 이용한 실행을 권장
 
 ## 실행 확인
 
-- http://localhost:8080
-- http://localhost:8080/health
-- http://localhost:8080/hello
+- http://localhost:8080/api/v1/health
+- http://localhost:8080/api/v1/swagger-ui
+- http://localhost:8080/api/v1/api-docs
 
 - 3가지 기본 테스트용 엔드포인트 (method: GET)
 
@@ -49,6 +48,10 @@ java -jar build/libs/ai-star-server.jar
   DB_USER=사용자명
   DB_PW=db 비번
   DB_URL=db url
+  AI_SERVER_BASE_URL=https://ait.hanbin5.com
+  AISTAR_AI_API_KEY=AI 서버 API key
+  CF_ACCESS_CLIENT_ID=Cloudflare Access Client ID
+  CF_ACCESS_CLIENT_SECRET=Cloudflare Access Client Secret
 ```
 
 - 실행 -> 구성 편집
