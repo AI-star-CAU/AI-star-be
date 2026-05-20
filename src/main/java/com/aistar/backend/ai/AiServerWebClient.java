@@ -13,7 +13,6 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.MediaType;
-import org.springframework.http.HttpStatusCode;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.http.codec.ServerSentEvent;
@@ -26,10 +25,10 @@ import java.util.function.Consumer;
 @RequiredArgsConstructor
 public class AiServerWebClient implements AiServerClient {
 
-    // AI-star-ai worker contract. Summary and branch-title are prompt wrappers
-    // over the same completion endpoint for now.
-    private static final String CHAT_STREAM_PATH = "/v1/chat/completions/stream";
-    private static final String COMPLETIONS_PATH = "/v1/chat/completions";
+    // AI-star-ai Dashboard Adapter contract. Summary and branch-title are
+    // prompt wrappers over the same completion endpoint for now.
+    private static final String CHAT_STREAM_PATH = "/api/v1/ai/completions/stream";
+    private static final String COMPLETIONS_PATH = "/api/v1/ai/completions";
     private static final ParameterizedTypeReference<ServerSentEvent<String>> SSE_TYPE =
             new ParameterizedTypeReference<>() {
             };
@@ -48,7 +47,7 @@ public class AiServerWebClient implements AiServerClient {
                 .accept(MediaType.TEXT_EVENT_STREAM)
                 .bodyValue(request)
                 .retrieve()
-                .onStatus(HttpStatusCode::isError, response -> response.bodyToMono(String.class)
+                .onStatus(status -> !status.is2xxSuccessful(), response -> response.bodyToMono(String.class)
                         .map(body -> new AiServerException("AI server stream request failed: " + body)))
                 .bodyToFlux(SSE_TYPE)
                 .timeout(readTimeout);
@@ -79,7 +78,7 @@ public class AiServerWebClient implements AiServerClient {
                 .accept(MediaType.APPLICATION_JSON)
                 .bodyValue(request)
                 .retrieve()
-                .onStatus(HttpStatusCode::isError, response -> response.bodyToMono(String.class)
+                .onStatus(status -> !status.is2xxSuccessful(), response -> response.bodyToMono(String.class)
                         .map(body -> new AiServerException("AI server completion request failed: " + body)))
                 .bodyToMono(AiCompletionResponse.class)
                 .timeout(readTimeout)

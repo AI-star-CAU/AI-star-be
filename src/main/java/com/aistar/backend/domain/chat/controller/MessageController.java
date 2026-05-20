@@ -24,7 +24,7 @@ public class MessageController {
     private final MessageService messageService;
 
     @Operation(summary = "메시지 송신 (SSE 스트리밍)")
-    @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    @PostMapping(produces = {MediaType.TEXT_EVENT_STREAM_VALUE, MediaType.APPLICATION_JSON_VALUE})
     public SseEmitter sendMessage(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long chatId,
@@ -36,6 +36,31 @@ public class MessageController {
         MessageService.TurnContext ctx = messageService.createTurnAndMessages(memberId, chatId, dto.content());
 
         // SSE 스트리밍 시작 (비동기)
+        return messageService.streamMessage(ctx);
+    }
+
+    @Operation(summary = "응답 재생성 (자동 분기)")
+    @PostMapping(value = "/{messageId}/regenerate", produces = {MediaType.TEXT_EVENT_STREAM_VALUE, MediaType.APPLICATION_JSON_VALUE})
+    public SseEmitter regenerateMessage(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable Long chatId,
+            @PathVariable Long messageId
+    ) {
+        Long memberId = userDetails.getMember().getId();
+        MessageService.TurnContext ctx = messageService.regenerateMessage(memberId, chatId, messageId);
+        return messageService.streamMessage(ctx);
+    }
+
+    @Operation(summary = "메시지 수정 (자동 분기)")
+    @PatchMapping(value = "/{messageId}", produces = {MediaType.TEXT_EVENT_STREAM_VALUE, MediaType.APPLICATION_JSON_VALUE})
+    public SseEmitter editMessage(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable Long chatId,
+            @PathVariable Long messageId,
+            @RequestBody @Valid MessageReqDto.Send dto
+    ) {
+        Long memberId = userDetails.getMember().getId();
+        MessageService.TurnContext ctx = messageService.editMessage(memberId, chatId, messageId, dto.content());
         return messageService.streamMessage(ctx);
     }
 

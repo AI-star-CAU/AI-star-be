@@ -4,6 +4,7 @@ import com.aistar.backend.domain.chat.enums.LlmModel;
 import com.aistar.backend.domain.chat.enums.LlmProvider;
 import com.aistar.backend.domain.member.entity.Member;
 import com.aistar.backend.global.entity.BaseEntity;
+import com.aistar.backend.domain.chat.enums.TitleStatus;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -16,20 +17,28 @@ import java.util.List;
 @Builder
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
-@Table(name = "chat")
+@Table(name = "chat", indexes = {
+        @Index(name = "idx_chat_root_deleted", columnList = "root_chat_id, deleted_at"),
+        @Index(name = "idx_chat_parent", columnList = "parent_id"),
+        @Index(name = "idx_chat_branch_point", columnList = "branch_point_turn_id")
+})
 public class Chat extends BaseEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    @Column(name = "aichat_session_id")
+    @Column(name = "chat_id")
     private Long id;
 
     @Column(name = "root_chat_id")
     private Long rootChatId;
 
-    @Column(name = "title", nullable = false, columnDefinition = "TEXT")
+    @Column(name = "title", columnDefinition = "TEXT")
+    private String title;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "title_status", nullable = false)
     @Builder.Default
-    private String title = "제목없음";
+    private TitleStatus titleStatus = TitleStatus.PENDING;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "llm_provider", nullable = false)
@@ -47,6 +56,9 @@ public class Chat extends BaseEntity {
 
     @Column(name = "branch_point_turn_id")
     private Long branchPointTurnId;
+
+    @Column(name = "last_turn_id")
+    private Long lastTurnId;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "member_id", nullable = false)
@@ -69,5 +81,14 @@ public class Chat extends BaseEntity {
 
     public void touchUpdatedAt() {
         setUpdatedAt(LocalDateTime.now());
+    }
+
+    public void updateLastTurnId(Long turnId) {
+        this.lastTurnId = turnId;
+    }
+
+    public void updateTitle(String title) {
+        this.title = title;
+        this.titleStatus = TitleStatus.USER_EDITED;
     }
 }

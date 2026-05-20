@@ -12,7 +12,9 @@ import java.util.List;
 @Builder
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
-@Table(name = "turn")
+@Table(name = "turn", indexes = {
+        @Index(name = "idx_turn_chat_sequence", columnList = "chat_id, turn_sequence")
+})
 public class Turn {
 
     @Id
@@ -24,15 +26,14 @@ public class Turn {
     private Integer turnSequence;
 
     @Column(name = "summary", columnDefinition = "TEXT")
-    @Builder.Default
-    private String summary = "제목없음";
+    private String summary;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     @Builder.Default
     private LocalDateTime createdAt = LocalDateTime.now();
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "aichat_session_id", nullable = false)
+    @JoinColumn(name = "chat_id", nullable = false)
     private Chat chat;
 
     @OneToMany(mappedBy = "turn")

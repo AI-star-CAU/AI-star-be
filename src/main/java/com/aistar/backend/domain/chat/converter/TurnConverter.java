@@ -24,6 +24,7 @@ public class TurnConverter {
 
     public static TurnResDto.MessageItem toMessageItem(Message message) {
         return TurnResDto.MessageItem.builder()
+                .chatId(message.getTurn().getChat().getId())
                 .messageId(message.getId())
                 .senderType(message.getSenderType())
                 .status(message.getStatus())

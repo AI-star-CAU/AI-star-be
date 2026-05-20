@@ -62,7 +62,6 @@ out/
 ### VS Code ###
 .vscode/
 
-CLAUDE.md
 .env
 .venv/
 oracleJdk-*/

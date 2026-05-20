@@ -12,7 +12,9 @@ import java.time.LocalDateTime;
 @Builder
 @AllArgsConstructor(access = AccessLevel.PRIVATE)
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
-@Table(name = "message")
+@Table(name = "message", indexes = {
+        @Index(name = "idx_message_turn", columnList = "turn_id")
+})
 public class Message {
 
     @Id
