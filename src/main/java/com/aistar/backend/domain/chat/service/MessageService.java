@@ -290,6 +290,13 @@ public class MessageService {
             throw new ProjectException(ErrorStatus.MESSAGE_ACTION_NOT_ALLOWED);
         }
 
+        // 마지막 턴의 AI 메시지만 재생성 가능
+        Turn lastTurn = turnRepository.findTopByChatIdOrderByTurnSequenceDesc(chatId)
+                .orElseThrow(() -> new ProjectException(ErrorStatus.TURN_NOT_FOUND));
+        if (!message.getTurn().getId().equals(lastTurn.getId())) {
+            throw new ProjectException(ErrorStatus.MESSAGE_ACTION_NOT_ALLOWED);
+        }
+
         // STREAMING 중이면 기존 스트리밍을 cancel한 후 진행
         if (message.getStatus() == MessageStatus.STREAMING) {
             StreamingContext streamCtx = streamingContexts.get(messageId);
