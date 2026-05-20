@@ -26,7 +26,7 @@ public class Chat extends BaseEntity {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
-    @Column(name = "aichat_session_id")
+    @Column(name = "chat_id")
     private Long id;
 
     @Column(name = "root_chat_id")

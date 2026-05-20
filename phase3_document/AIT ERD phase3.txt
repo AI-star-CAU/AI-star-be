@@ -137,7 +137,7 @@ ALTER TABLE `social` ADD CONSTRAINT `PK_SOCIAL` PRIMARY KEY (
 CREATE INDEX idx_chat_root_deleted  ON chat(root_chat_id, deleted_at);
 CREATE INDEX idx_chat_parent        ON chat(parent_id);
 CREATE INDEX idx_chat_branch_point  ON chat(branch_point_turn_id);
-CREATE INDEX idx_turn_chat_sequence ON turn(aichat_session_id, turn_sequence);
+CREATE INDEX idx_turn_chat_sequence ON turn(chat_id, turn_sequence);
 CREATE INDEX idx_message_turn       ON message(turn_id);
 
 
