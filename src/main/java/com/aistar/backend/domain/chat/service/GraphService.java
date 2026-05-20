@@ -30,7 +30,7 @@ public class GraphService {
             throw new ProjectException(ErrorStatus.GRAPH_INVALID_PARAM);
         }
 
-        Chat pathChat = chatRepository.findByIdAndDeletedAtIsNull(chatId)
+        Chat pathChat = chatRepository.findByIdWithMemberAndDeletedAtIsNull(chatId)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
         validateOwner(pathChat, memberId);
 
@@ -288,7 +288,7 @@ public class GraphService {
             throw new ProjectException(ErrorStatus.GRAPH_INVALID_PARAM);
         }
 
-        Chat pathChat = chatRepository.findByIdAndDeletedAtIsNull(chatId)
+        Chat pathChat = chatRepository.findByIdWithMemberAndDeletedAtIsNull(chatId)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
         validateOwner(pathChat, memberId);
 

@@ -20,13 +20,25 @@ public interface TurnRepository extends JpaRepository<Turn, Long> {
     List<Turn> findByChatIdAndTurnSequenceLessThanOrderByTurnSequenceDesc(
             Long chatId, int turnSequence, org.springframework.data.domain.Pageable pageable);
 
+    // cursor 기반 페이징: BACKWARD (과거로) — messages fetch join
+    @Query("SELECT DISTINCT t FROM Turn t LEFT JOIN FETCH t.messages WHERE t.chat.id = :chatId AND t.turnSequence < :seq ORDER BY t.turnSequence DESC")
+    List<Turn> findByChatIdAndTurnSequenceLessThanWithMessages(@Param("chatId") Long chatId, @Param("seq") int seq, org.springframework.data.domain.Pageable pageable);
+
     // cursor 기반 페이징: 첫 호출 (최신부터)
     List<Turn> findByChatIdOrderByTurnSequenceDesc(
             Long chatId, org.springframework.data.domain.Pageable pageable);
 
+    // cursor 기반 페이징: 첫 호출 — messages fetch join
+    @Query("SELECT DISTINCT t FROM Turn t LEFT JOIN FETCH t.messages WHERE t.chat.id = :chatId ORDER BY t.turnSequence DESC")
+    List<Turn> findByChatIdWithMessages(@Param("chatId") Long chatId, org.springframework.data.domain.Pageable pageable);
+
     // cursor 기반 페이징: FORWARD (미래로)
     List<Turn> findByChatIdAndTurnSequenceGreaterThanOrderByTurnSequenceAsc(
             Long chatId, int turnSequence, org.springframework.data.domain.Pageable pageable);
+
+    // cursor 기반 페이징: FORWARD — messages fetch join
+    @Query("SELECT DISTINCT t FROM Turn t LEFT JOIN FETCH t.messages WHERE t.chat.id = :chatId AND t.turnSequence > :seq ORDER BY t.turnSequence ASC")
+    List<Turn> findByChatIdAndTurnSequenceGreaterThanWithMessages(@Param("chatId") Long chatId, @Param("seq") int seq, org.springframework.data.domain.Pageable pageable);
 
     // 특정 turn 단건 조회
     Optional<Turn> findByIdAndChatId(Long turnId, Long chatId);

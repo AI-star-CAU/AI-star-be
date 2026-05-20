@@ -1,10 +1,9 @@
 CREATE TABLE `turn` (
 	`turn_id`	bigint	NOT NULL,
-	`summary`	text	NULL	DEFAULT 제목없음,
+	`summary`	text	NULL,
 	`created_at`	timestamp	NOT NULL	DEFAULT now(),
 	`turn_sequence`	INT	NOT NULL,
-	`Field`	VARCHAR(255)	NULL,
-	`chat_id`	bigint	NOT NULL
+`chat_id`	bigint	NOT NULL
 );
 
 CREATE TABLE `payment_history` (

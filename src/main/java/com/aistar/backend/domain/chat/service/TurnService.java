@@ -30,7 +30,7 @@ public class TurnService {
                                         Integer lastTurnSequence, int limit,
                                         CursorDirection direction) {
 
-        Chat chat = chatRepository.findByIdAndDeletedAtIsNull(chatId)
+        Chat chat = chatRepository.findByIdWithMemberAndDeletedAtIsNull(chatId)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
 
         if (!chat.getMember().getId().equals(memberId)) {
@@ -45,15 +45,15 @@ public class TurnService {
             if (lastTurnSequence == null) {
                 turns = List.of();
             } else {
-                turns = turnRepository.findByChatIdAndTurnSequenceGreaterThanOrderByTurnSequenceAsc(
+                turns = turnRepository.findByChatIdAndTurnSequenceGreaterThanWithMessages(
                         chatId, lastTurnSequence, pageRequest);
             }
         } else {
             // BACKWARD
             if (lastTurnSequence == null) {
-                turns = turnRepository.findByChatIdOrderByTurnSequenceDesc(chatId, pageRequest);
+                turns = turnRepository.findByChatIdWithMessages(chatId, pageRequest);
             } else {
-                turns = turnRepository.findByChatIdAndTurnSequenceLessThanOrderByTurnSequenceDesc(
+                turns = turnRepository.findByChatIdAndTurnSequenceLessThanWithMessages(
                         chatId, lastTurnSequence, pageRequest);
             }
         }

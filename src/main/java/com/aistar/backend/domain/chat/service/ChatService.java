@@ -139,7 +139,7 @@ public class ChatService {
     }
 
     private Chat findChatOrThrow(Long chatId) {
-        return chatRepository.findByIdAndDeletedAtIsNull(chatId)
+        return chatRepository.findByIdWithMemberAndDeletedAtIsNull(chatId)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
     }
 

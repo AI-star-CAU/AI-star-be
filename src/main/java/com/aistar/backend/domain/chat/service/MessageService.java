@@ -55,7 +55,7 @@ public class MessageService {
 
     @Transactional
     public TurnContext createTurnAndMessages(Long memberId, Long chatId, String userContent) {
-        Chat chat = chatRepository.findByIdAndDeletedAtIsNull(chatId)
+        Chat chat = chatRepository.findByIdWithMemberAndDeletedAtIsNull(chatId)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
 
         if (!chat.getMember().getId().equals(memberId)) {
@@ -209,14 +209,14 @@ public class MessageService {
     @Transactional
     public MessageResDto.CancelResult cancelMessage(Long memberId, Long chatId, Long messageId) {
         // 1. chat 소유권
-        Chat chat = chatRepository.findByIdAndDeletedAtIsNull(chatId)
+        Chat chat = chatRepository.findByIdWithMemberAndDeletedAtIsNull(chatId)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
         if (!chat.getMember().getId().equals(memberId)) {
             throw new ProjectException(ErrorStatus.FORBIDDEN);
         }
 
-        // 2. 메시지 존재 + chatId 소속 확인
-        Message message = messageRepository.findById(messageId)
+        // 2. 메시지 존재 + chatId 소속 확인 (fetch join으로 turn→chat 즉시 로딩)
+        Message message = messageRepository.findByIdWithTurnAndChat(messageId)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.MESSAGE_NOT_FOUND));
         if (!message.getTurn().getChat().getId().equals(chatId)) {
             throw new ProjectException(ErrorStatus.MESSAGE_NOT_FOUND);
@@ -274,13 +274,13 @@ public class MessageService {
 
     @Transactional
     public TurnContext regenerateMessage(Long memberId, Long chatId, Long messageId) {
-        Chat chat = chatRepository.findByIdAndDeletedAtIsNull(chatId)
+        Chat chat = chatRepository.findByIdWithMemberAndDeletedAtIsNull(chatId)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
         if (!chat.getMember().getId().equals(memberId)) {
             throw new ProjectException(ErrorStatus.FORBIDDEN);
         }
 
-        Message message = messageRepository.findById(messageId)
+        Message message = messageRepository.findByIdWithTurnAndChat(messageId)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.MESSAGE_NOT_FOUND));
         if (!message.getTurn().getChat().getId().equals(chatId)) {
             throw new ProjectException(ErrorStatus.MESSAGE_NOT_FOUND);
@@ -309,13 +309,13 @@ public class MessageService {
 
     @Transactional
     public TurnContext editMessage(Long memberId, Long chatId, Long messageId, String content) {
-        Chat chat = chatRepository.findByIdAndDeletedAtIsNull(chatId)
+        Chat chat = chatRepository.findByIdWithMemberAndDeletedAtIsNull(chatId)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.CHAT_NOT_FOUND));
         if (!chat.getMember().getId().equals(memberId)) {
             throw new ProjectException(ErrorStatus.FORBIDDEN);
         }
 
-        Message message = messageRepository.findById(messageId)
+        Message message = messageRepository.findByIdWithTurnAndChat(messageId)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.MESSAGE_NOT_FOUND));
         if (!message.getTurn().getChat().getId().equals(chatId)) {
             throw new ProjectException(ErrorStatus.MESSAGE_NOT_FOUND);
