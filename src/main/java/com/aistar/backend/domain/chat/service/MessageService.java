@@ -293,16 +293,19 @@ public class MessageService {
         }
 
         Turn targetTurn = message.getTurn();
-        Turn branchPointTurn = resolveBranchPoint(targetTurn, chat);
 
-        // 원본 user 메시지 내용
-        String userContent = targetTurn.getMessages().stream()
+        // 원본 user 메시지
+        Message userMessage = targetTurn.getMessages().stream()
                 .filter(m -> m.getSenderType() == SenderType.USER)
                 .findFirst()
-                .map(Message::getContent)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.MESSAGE_ACTION_NOT_ALLOWED));
 
-        return createBranchTurn(chat, branchPointTurn, userContent);
+        // 기존 AI 메시지를 초기화하여 재사용
+        message.updateContent(null);
+        message.updateAnswerToken(null);
+        message.updateStatus(MessageStatus.STREAMING);
+
+        return new TurnContext(chat, targetTurn, userMessage, message);
     }
 
     // ── 메시지 수정 (§4.2) ──
