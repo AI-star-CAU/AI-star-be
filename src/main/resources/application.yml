@@ -23,6 +23,15 @@ jwt:
   secret: ${JWT_SECRET:defaultSecretKeyForDevelopmentOnlyMustBeAtLeast256Bits!!}
   expiration: 43200000  # 12시간 (ms)
 
+ai:
+  server:
+    base-url: ${AI_SERVER_BASE_URL:http://127.0.0.1:8765}
+    connect-timeout: 3000
+    read-timeout: 60000
+    api-key: ${AISTAR_AI_API_KEY:}
+    cf-access-client-id: ${CF_ACCESS_CLIENT_ID:}
+    cf-access-client-secret: ${CF_ACCESS_CLIENT_SECRET:}
+
 server:
   servlet:
     context-path: /api/v1
