@@ -26,9 +26,10 @@ import java.util.function.Consumer;
 @RequiredArgsConstructor
 public class AiServerWebClient implements AiServerClient {
 
-    // TODO: Confirm whether summary and branch-title receive dedicated endpoints later.
-    private static final String CHAT_STREAM_PATH = "/api/v1/ai/completions/stream";
-    private static final String COMPLETIONS_PATH = "/api/v1/ai/completions";
+    // AI-star-ai worker contract. Summary and branch-title are prompt wrappers
+    // over the same completion endpoint for now.
+    private static final String CHAT_STREAM_PATH = "/v1/chat/completions/stream";
+    private static final String COMPLETIONS_PATH = "/v1/chat/completions";
     private static final ParameterizedTypeReference<ServerSentEvent<String>> SSE_TYPE =
             new ParameterizedTypeReference<>() {
             };
@@ -52,11 +53,11 @@ public class AiServerWebClient implements AiServerClient {
                 .bodyToFlux(SSE_TYPE)
                 .timeout(readTimeout);
 
-        stream.toIterable().forEach(event -> {
+        stream.takeUntil(this::isDoneEvent).toIterable().forEach(event -> {
             if ("error".equals(event.event())) {
                 throw new AiServerException("AI server stream error: " + extractErrorMessage(event.data()));
             }
-            if ("done".equals(event.event()) || "[DONE]".equals(event.data())) {
+            if (isDoneEvent(event)) {
                 return;
             }
             String text = extractText(event.data());
@@ -64,6 +65,10 @@ public class AiServerWebClient implements AiServerClient {
                 onChunk.accept(text);
             }
         });
+    }
+
+    private boolean isDoneEvent(ServerSentEvent<String> event) {
+        return "done".equals(event.event()) || "[DONE]".equals(event.data());
     }
 
     @Override
