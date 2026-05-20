@@ -16,6 +16,7 @@ public class MessageResDto {
 
     @Builder
     public record TurnStarted(
+            Long chatId,
             Long turnId,
             Long userMessageId,
             Long aiMessageId

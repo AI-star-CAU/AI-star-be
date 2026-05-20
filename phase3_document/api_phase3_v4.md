@@ -1,7 +1,7 @@
 # Phase 3 API 명세서
 
 **문서 식별자:** API-AIT-P3  
-**버전:** 0.6  
+**버전:** 0.7  
 **작성일:** 2026-05-20 
 **대상 Phase:** Phase 3 (W12~W13) — 분기 관리 + 그래프 시각화  
 **범위:** FG-2 분기 관리, FG-3 그래프 시각화, FR-1.4 응답 재생성, FR-1.5 사용자 메시지 수정  
@@ -703,9 +703,7 @@ frontier 지점에서 윈도우를 추가로 펼친다. 전체 graph 응답을 �
 
 ---
 
-## 4. 분기 메커니즘 기반 메시지 작업 (FG-1 확장)
-
-다음 두 엔드포인트는 분기 시스템이 도입된 후에야 의미를 갖는 기능이다 (SRS: "수정/재생성 결과는 기존 대화를 바꾸지 않고 같은 지점에서 새로 갈라진 대화로 저장"). 따라서 Phase 3에 배정한다.
+## 4. 메시지 재생성 및 수정 (FG-1 확장)
 
 ### 4.1 응답 재생성
 
@@ -717,9 +715,7 @@ Accept: text/event-stream
 
 **인증 필요:** ✓
 
-직전 assistant 응답을 재생성한다. 기존 응답은 보존되며, 같은 분기점에서 자동으로 새 분기가 생성되고 그 안에서 첫 메시지로 새 응답이 스트리밍된다.
-
-> Phase 2 §5 예고와 동일한 경로. 본 명세에서 SSE 흐름을 확정한다.
+직전 assistant 응답을 재생성한다. **새 분기를 생성하지 않고, 같은 turn의 기존 AI 메시지를 새 LLM 응답으로 덮어쓴다.** Turn 수, Chat 수 모두 변하지 않는다.
 
 **Path Parameters**
 
@@ -733,17 +729,19 @@ Accept: text/event-stream
 **응답 (200 OK, `Content-Type: text/event-stream`)**
 
 처리 흐름:
-1. `messageId`가 속한 turn을 식별
-2. 그 turn의 user 메시지를 입력으로 사용
-3. **분기점 결정 규칙** (§4.1.1 참조)에 따라 branchPoint turn 선택
-4. 해당 branchPoint를 기준으로 새 분기 자동 생성
-5. 새 분기 안에서 user 메시지 재기록 + LLM 응답 스트리밍
+1. `messageId`가 속한 turn을 식별하고 소유권을 검증
+2. 그 turn의 user 메시지 내용을 입력으로 사용
+3. 기존 AI 메시지를 초기화 (content=null, status=STREAMING)
+4. 같은 turn, 같은 메시지를 대상으로 LLM 응답 스트리밍
+5. 스트리밍 완료 시 AI 메시지의 content와 status를 갱신
 
-SSE 이벤트 시퀀스는 Phase 2 §2.5의 메시지 송신과 동일한 패턴을 따른다. 재생성에서는 별도의 `branch_created` 이벤트를 전송하지 않는다.
+> 이전 응답은 보존되지 않는다. 덮어쓰기 방식이므로 기존 content는 새 응답으로 대체된다.
+
+SSE 이벤트 시퀀스:
 
 ```
 event: turn_started
-data: {"turnId": 200, "userMessageId": 400, "aiMessageId": 401}
+data: {"chatId": 42, "turnId": 200, "userMessageId": 400, "aiMessageId": 401}
 
 event: chunk
 data: {"text": "..."}
@@ -757,30 +755,25 @@ event: done
 data: {}
 ```
 
-> **Phase 2 SSE와의 차이:** Phase 2의 `turn_completed`에는 `summary`가 즉시 포함되었으나, Phase 3에서는 turn summary 생성이 비동기로 분리된다(§0.5 원칙 3 및 §5 처리 시점 표). 따라서 `turn_completed`에는 `summaryStatus: "PENDING"`만 포함되며, summary 본문은 비동기 워커가 채운 후 다음 graph/turns 조회 시 반영된다. **이 변경은 Phase 2의 일반 메시지 송신 API에도 후속 마이그레이션으로 적용 권장.**
+> 재생성 시 `branch_created` 이벤트는 전송하지 않는다.
+
+> 대상 메시지가 현재 STREAMING 상태(이전 재생성이 진행 중)인 경우, 기존 스트리밍을 cancel한 후 새로 시작한다. 에러를 반환하지 않는다.
 
 **SSE 이벤트 타입 (Phase 2 §2.5 대비 변경/추가)**
 
 | event | data 스키마 | 의미 |
 |---|---|---|
+| `turn_started` | `{chatId: Long, turnId: Long, userMessageId: Long, aiMessageId: Long}` | **변경.** chatId 필드 추가 |
 | `turn_completed` | `{turnId: Long, aiMessageId: Long, answerToken: Integer, summaryStatus: Enum<"PENDING">}` | **변경.** summary 필드 제거, summaryStatus 추가 |
 | 이외 | (Phase 2와 동일) | |
 
-#### 4.1.1 분기점(branchPoint) 결정 규칙
-
-재생성/수정 대상 turn의 **논리적 직전 turn**을 branchPoint로 사용한다.
-
-1. **대상 turn의 turnSequence > 1** → 같은 chat의 `turnSequence - 1` turn을 branchPoint로 사용.
-2. **대상 turn의 turnSequence = 1이고 현재 chat이 branch** → 현재 chat의 `branchPointTurnId`를 branchPoint로 사용 (부모 chat의 turn으로 거슬러 올라감).
-3. **대상 turn의 turnSequence = 1이고 현재 chat이 root** → 더 이전 맥락이 없으므로 재생성/수정을 거부한다. `409 Conflict` + `MESSAGE_4092` 반환.
-
-> 규칙 3은 단순성을 위한 정책 선택이다. 향후 "root의 첫 turn 수정 시 sibling root 생성" 같은 확장은 별도 논의가 필요하다.
+> **Phase 2 SSE와의 차이:** Phase 2의 `turn_completed`에는 `summary`가 즉시 포함되었으나, Phase 3에서는 turn summary 생성이 비동기로 분리된다(§0.5 원칙 3 및 §5 처리 시점 표). 따라서 `turn_completed`에는 `summaryStatus: "PENDING"`만 포함되며, summary 본문은 비동기 워커가 채운 후 다음 graph/turns 조회 시 반영된다. **이 변경은 Phase 2의 일반 메시지 송신 API에도 후속 마이그레이션으로 적용 권장.**
 
 **프론트엔드 권장 흐름**
 
-1. `turn_started`부터 Phase 2와 동일하게 처리
-2. `chunk*`를 누적해 assistant 메시지를 점진적으로 표시
-3. `done` 수신 후 messages/conversations/graph를 재조회해 서버 저장본으로 확정
+1. `turn_started`의 `chatId`와 `aiMessageId`를 사용해 대상 메시지를 식별
+2. `chunk*`를 누적해 기존 assistant 메시지의 content를 교체하며 점진적으로 표시
+3. `done` 수신 후 messages를 재조회해 서버 저장본으로 확정
 4. summary는 별도 polling 또는 다음 graph 조회 시 채워짐
 
 **에러 응답 규칙**
@@ -795,10 +788,23 @@ Phase 2 §2.5와 동일. 스트리밍 시작 전 에러는 `ApiResponse<T>` JSON
 | 403 | `COMMON_403` | |
 | 404 | `CHAT_4041` | |
 | 404 | `MESSAGE_4041` | 존재하지 않는 messageId |
-| 409 | `MESSAGE_4092` | senderType이 ASSISTANT가 아니거나 STREAMING 상태, 또는 root chat의 첫 turn(§4.1.1 규칙 3) |
+| 409 | `MESSAGE_4092` | senderType이 ASSISTANT가 아님 |
 | stream | `LLM_5001` | LLM API 호출 실패 |
 
-**관련 FR:** FR-1.4, FR-2.1, FR-2.2
+**관련 FR:** FR-1.4
+
+#### 4.1.1 분기점(branchPoint) 결정 규칙
+
+메시지 수정(§4.2)에서 사용하는 규칙이다. 수정 대상 turn의 **논리적 직전 turn**을 branchPoint로 사용한다.
+
+1. **대상 turn의 turnSequence > 1** → 같은 chat의 `turnSequence - 1` turn을 branchPoint로 사용.
+2. **대상 turn의 turnSequence = 1이고 현재 chat이 branch** → 현재 chat의 `branchPointTurnId`를 branchPoint로 사용 (부모 chat의 turn으로 거슬러 올라감).
+3. **대상 turn의 turnSequence = 1이고 현재 chat이 root** → 더 이전 맥락이 없으므로 수정을 거부한다. `409 Conflict` + `MESSAGE_4092` 반환.
+
+> 규칙 3은 단순성을 위한 정책 선택이다. 향후 "root의 첫 turn 수정 시 sibling root 생성" 같은 확장은 별도 논의가 필요하다.
+> 응답 재생성(§4.1)에는 적용되지 않는다. 재생성은 분기를 생성하지 않으므로 branchPoint가 필요 없다.
+
+**관련 FR:** FR-1.4, FR-1.5
 
 ---
 
@@ -920,7 +926,7 @@ SSE 흐름은 `branch_created` → `turn_started` → `chunk*` → `turn_complet
    ← turns 추가 + 새 frontier
 ```
 
-### 6.4 응답 재생성 (자동 분기)
+### 6.4 응답 재생성 (덮어쓰기)
 
 ```
 1. 사용자가 assistant 메시지 401에서 "재생성" 클릭
@@ -928,13 +934,13 @@ SSE 흐름은 `branch_created` → `turn_started` → `chunk*` → `turn_complet
    ← SSE 스트림 시작
 
 2. SSE 이벤트 시퀀스:
-   event: turn_started    → 재생성 응답 시작
-   event: chunk           → 점진적 표시
+   event: turn_started    → chatId=42, aiMessageId=401 (기존과 동일한 ID)
+   event: chunk           → 기존 메시지를 새 응답으로 점진적 교체
    ...
    event: turn_completed
    event: done
 
-3. 백그라운드 워커가 분기 제목 비동기 생성 (§6.1과 동일)
+3. 분기 생성 없음. 같은 chat, 같은 turn, 같은 메시지 ID에 새 content가 덮어쓰여짐
 ```
 
 ---
@@ -974,7 +980,7 @@ Phase 2 §4 ERD ↔ API 매핑에 다음을 추가한다.
 | DELETE | `/api/v1/chats/{chatId}` | 분기 삭제 (cascade) | ✓ | FR-2.5 | 필수 |
 | GET | `/api/v1/chats/{chatId}/graph` | 그래프 조회 (window) | ✓ | FR-3.1, FR-3.3, FR-3.4 | 필수 |
 | GET | `/api/v1/chats/{chatId}/graph/expand` | 윈도우 확장 | ✓ | FR-3.2, FR-3.5 | 필수 |
-| POST | `/api/v1/chats/{chatId}/messages/{messageId}/regenerate` | 응답 재생성 (자동 분기) | ✓ | FR-1.4 | 필수 |
+| POST | `/api/v1/chats/{chatId}/messages/{messageId}/regenerate` | 응답 재생성 (덮어쓰기) | ✓ | FR-1.4 | 필수 |
 | PATCH | `/api/v1/chats/{chatId}/messages/{messageId}` | 메시지 수정 (자동 분기) | ✓ | FR-1.5 | 필수 |
 | POST | `/api/v1/chats/{chatId}/restore` | 분기 복구 | ✓ | FR-2.5 | 보류 가능 |
 
@@ -1030,3 +1036,4 @@ Phase 2 §4 ERD ↔ API 매핑에 다음을 추가한다.
 | 0.4 | 2026-05-18 | ERD 컬럼명 정리 (`aichat_session_id` → `chat_id`, `Summary` → `summary`). collapsed handle 클릭 시 centerTurnId 결정 우선순위 명확화. collapsed 정보 계산 책임을 클라이언트로 명시. expand 에러 케이스 보강(`includeDeleted=false`인데 fromTurnId가 삭제된 chat에 속한 경우). 본문 가독성 개선: "골격" → "분기 구조/분기 메타데이터", "홉" → "단계"로 정리하고 일부 전공 용어에 괄호 풀이 추가. |
 | 0.5 | 2026-05-20 | `chat.title` nullable 정책 변경: `NOT NULL DEFAULT '제목없음'` → `NULL`. 제목 미지정·자동 생성 전 상태를 null로 표현하고 화면용 기본 문구("제목없음", "새 분기")는 DB에 저장하지 않음. ERD §1, 처리 흐름, 응답 예시 일괄 반영. |
 | 0.6 | 2026-05-20 | 응답 재생성 SSE 흐름에서 `branch_created` 이벤트를 제거. 재생성은 `turn_started` → `chunk*` → `turn_completed` → `done` 순서로 처리하며, 클라이언트는 `done` 이후 messages/conversations/graph를 재조회해 서버 저장본으로 확정하도록 정리. |
+| 0.7 | 2026-05-20 | 응답 재생성 방식 변경: 분기 생성 → **기존 AI 메시지 덮어쓰기**. 새 Turn/Chat을 생성하지 않고 같은 turn의 AI 메시지 content를 새 LLM 응답으로 교체. `turn_started` SSE 이벤트에 `chatId` 필드 추가. STREAMING 상태의 메시지에 재생성 요청 시 기존 스트리밍을 cancel하고 새로 시작하도록 변경 (에러 → 허용). §4.1.1 분기점 결정 규칙은 메시지 수정(§4.2)에만 적용되도록 범위 명확화. |

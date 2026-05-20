@@ -4,7 +4,7 @@
 
 Phase 2(Walking Skeleton)에서 구현한 기본 대화 기능 위에, **분기(Branch) 트리 구조**와 **그래프 시각화 API**를 추가하여 대화 이력을 트리 형태로 관리할 수 있도록 확장하였다.
 
-**명세서**: `api_phase3_v4.md` (v0.5)  
+**명세서**: `api_phase3_v4.md` (v0.7)  
 **ERD**: `AIT ERD phase3.txt / .png`
 
 ---
@@ -32,7 +32,7 @@ Phase 2(Walking Skeleton)에서 구현한 기본 대화 기능 위에, **분기(
 | POST | `/chats/{chatId}/branches` | 분기 생성 | §2.8 |
 | PATCH | `/chats/{chatId}` | 대화/분기 제목 수정 | §2.9 |
 | DELETE | `/chats/{chatId}` | 대화 삭제 (cascade soft delete) | §2.10 |
-| POST | `/chats/{chatId}/messages/{messageId}/regenerate` | 응답 재생성 (자동 분기) | §4.1 |
+| POST | `/chats/{chatId}/messages/{messageId}/regenerate` | 응답 재생성 (덮어쓰기) | §4.1 |
 | PATCH | `/chats/{chatId}/messages/{messageId}` | 메시지 수정 (자동 분기) | §4.2 |
 | GET | `/chats/{chatId}/graph` | 그래프 조회 | §3.1 |
 | GET | `/chats/{chatId}/graph/expand` | 그래프 윈도우 확장 | §3.2 |
@@ -59,29 +59,48 @@ root(chat_id=1)
 
 **ChatService.createBranch()** — 부모 chat의 특정 turn에서 새 분기 chat을 생성한다. LLM 설정(provider, model)은 부모에서 상속한다.
 
-### 3.2 응답 재생성 / 메시지 수정 (자동 분기)
+### 3.2 응답 재생성 / 메시지 수정
 
-둘 다 기존 대화의 특정 지점에서 새로운 분기를 만들어 SSE 스트리밍을 시작하는 패턴이다.
+두 기능은 서로 다른 전략을 사용한다.
 
-**공통 로직**: `MessageService.createBranchTurn()` 으로 추출하여 중복을 제거했다.
+**응답 재생성** (`regenerateMessage`): 새 분기를 생성하지 않고, **기존 Turn의 AI 메시지를 초기화하여 새 LLM 응답으로 덮어쓴다**. Turn 수도, Chat 수도 변하지 않는다.
 
 ```
-regenerateMessage(messageId)     editMessage(messageId, newContent)
-         │                                │
-         ▼                                ▼
-   대상 메시지 검증               대상 메시지 검증
-   (ASSISTANT만 허용)            (USER만 허용)
-         │                                │
-         └──────── resolveBranchPoint() ───┘
-                          │
-                          ▼
-                 createBranchTurn()
-                 ├── 새 branch chat 생성
-                 ├── 새 turn + user/ai message 생성
-                 └── TurnContext 반환 → streamMessage()
+regenerateMessage(messageId)
+         │
+         ▼
+   대상 메시지 검증 (ASSISTANT만)
+   STREAMING 중이면 기존 스트리밍 cancel 후 진행
+         │
+         ▼
+   같은 Turn의 원본 USER 메시지 내용 추출
+         │
+         ▼
+   기존 AI 메시지 초기화 (content=null, status=STREAMING)
+         │
+         ▼
+   TurnContext(같은 chat, 같은 turn, 기존 user msg, 기존 ai msg) → streamMessage()
 ```
 
-**분기점 결정 규칙 (§4.1.1 resolveBranchPoint)**:
+**메시지 수정** (`editMessage`): 기존 대화의 특정 지점에서 **새로운 분기를 만들어** SSE 스트리밍을 시작한다.
+
+```
+editMessage(messageId, newContent)
+         │
+         ▼
+   대상 메시지 검증 (USER만 허용)
+         │
+         ▼
+   resolveBranchPoint()
+         │
+         ▼
+   createBranchTurn()
+   ├── 새 branch chat 생성
+   ├── 새 turn + user/ai message 생성
+   └── TurnContext 반환 → streamMessage()
+```
+
+**분기점 결정 규칙 (§4.1.1 resolveBranchPoint)** — 메시지 수정에만 적용:
 1. 대상 turn의 sequence > 1 → 같은 chat의 직전 turn
 2. 대상 turn이 첫 turn이고 현재 chat이 branch → 부모의 branchPointTurn
 3. root의 첫 turn → 거부 (더 이상 올라갈 곳 없음)
@@ -103,24 +122,37 @@ regenerateMessage(messageId)     editMessage(messageId, newContent)
 `MessageService.streamMessage()`이 `SseEmitter`를 반환하고, 내부에서 Virtual Thread를 사용하여 비동기로 LLM 호출 및 이벤트 전송을 수행한다.
 
 ```
-Controller → createTurnAndMessages() → streamMessage()
-                                            │
-                                     Virtual Thread 시작
-                                            │
-                  ┌─────────────────────────┤
-                  │ (분기 시) branch_created │
-                  ├─────────────────────────┤
-                  │ turn_started            │
-                  ├─────────────────────────┤
-                  │ chunk × N              │  ← LlmClient.streamCompletion()
-                  ├─────────────────────────┤
-                  │ turn_completed          │  ← DB 저장 (TransactionTemplate)
-                  ├─────────────────────────┤
-                  │ done                    │
-                  └─────────────────────────┘
-                            │
-                   generateSummaryAsync()  ← 별도 Virtual Thread
+일반 메시지 / 재생성:
+  turn_started → chunk × N → turn_completed → done
+
+메시지 수정 (분기 생성):
+  branch_created → turn_started → chunk × N → turn_completed → done
 ```
+
+```
+Controller → createTurnAndMessages() 또는 regenerateMessage() 또는 editMessage()
+                                  │
+                            streamMessage()
+                                  │
+                           Virtual Thread 시작
+                                  │
+                ┌─────────────────┤
+                │ (수정 시만)      │
+                │ branch_created  │
+                ├─────────────────┤
+                │ turn_started    │
+                ├─────────────────┤
+                │ chunk × N       │  ← LlmClient.streamCompletion()
+                ├─────────────────┤
+                │ turn_completed  │  ← DB 저장 (TransactionTemplate)
+                ├─────────────────┤
+                │ done            │
+                └─────────────────┘
+                          │
+                 generateSummaryAsync()  ← 별도 Virtual Thread
+```
+
+**`turn_started` 이벤트**: `{chatId, turnId, userMessageId, aiMessageId}` — 프론트가 어떤 chat의 메시지인지 즉시 식별할 수 있도록 `chatId`를 포함한다.
 
 **취소 흐름**: `cancelMessage()`가 `StreamingContext.canceled` 플래그를 set → 스트리밍 루프에서 `CancelException` throw → 부분 content 저장 후 `cancelled` 이벤트 전송.
 
@@ -138,6 +170,26 @@ Phase 3에서 `chat.title`을 **nullable**로 변경했다.
 - `MessageService.createBranchTurn()`: `.title(null)` 사용
 - `DataInitializer.java`: 테스트 데이터도 `.title(null)` 적용
 - ERD: `chat.title TEXT NULL`, `turn.summary TEXT NULL`
+
+### 3.6 N+1 쿼리 최적화
+
+채팅 1건 전송 시 30+개 SQL이 발생하는 N+1 문제를 **fetch join**으로 해결하여 **12개**(모두 필수 CRUD)로 줄였다.
+
+| 레이어 | 변경 | 효과 |
+|--------|------|------|
+| `ChatRepository` | `findByIdWithMemberAndDeletedAtIsNull` (JOIN FETCH member) 추가 | chat 조회 시 member LAZY 로딩 제거 |
+| `MessageRepository` | `findByIdWithTurnAndChat` (JOIN FETCH turn→chat) 추가 | message→turn→chat 체인 LAZY 로딩 제거 |
+| `TurnRepository` | `WithMessages` fetch join 변형 3개 추가 | cursor 페이징 시 turn→messages LAZY 로딩 제거 |
+| 모든 Service | 소유권 검증이 필요한 조회를 fetch join 버전으로 교체 | 불필요한 단건 SELECT 제거 |
+
+### 3.7 Spring Security 비동기 디스패치 수정
+
+`SseEmitter`의 비동기 디스패치 시 Spring Security가 `SecurityContext`를 찾지 못해 `AuthorizationDeniedException`이 발생하는 문제를 수정했다.
+
+```java
+// SecurityConfig.java — ASYNC/ERROR 디스패치에 대해 인가 생략
+.dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
+```
 
 ---
 
@@ -473,11 +525,15 @@ com.aistar.backend
 
 | 커밋 | 설명 |
 |------|------|
+| `2bd1404` | 분기 생성, 채팅 수정, 채팅 삭제 API 추가 |
 | `152fc18` | 그래프 조회 API — GraphService UP/DOWN 탐색, frontier 계산 |
 | `09f6a37` | 그래프 확장 API — expandWindow, 방향별 frontier |
 | `da25c3d` | 응답 재생성 API — regenerateMessage, resolveBranchPoint |
 | `2d6cd01` | 메시지 수정 API — editMessage, createBranchTurn 공통화 |
 | `18fa720` | title nullable 정책 변경 — DB 기본 문구 제거, ERD/명세 동기화 |
+| `2cca516` | N+1 쿼리 최적화 (fetch join), Security async dispatch 수정 |
+| `3691d94` | 명세서 v0.6 반영 |
+| `a0f0174` | 재생성 시 브랜치 생성 제거 — 기존 AI 메시지 덮어쓰기 방식으로 변경 |
 
 ---
 
@@ -502,7 +558,74 @@ CREATE INDEX idx_message_turn       ON message(turn_id);
 
 ---
 
-## 8. 미구현/보류 사항
+## 8. 개발 중 발생한 이슈 및 해결
+
+### 8.1 Spring Security 비동기 디스패치 Access Denied
+
+**증상**: SSE 스트리밍 도중 `AuthorizationDeniedException: Access Denied` 발생. 채팅 응답이 완료되기 전에 연결이 끊김.
+
+**원인**: `SseEmitter`가 응답을 비동기로 전송할 때, Spring Security가 `DispatcherType.ASYNC` 재디스패치에 대해 `SecurityContext`를 찾지 못해 인가를 거부함. 스택 트레이스의 `AsyncContextImpl$AsyncRunnable`에서 확인.
+
+**해결**: `SecurityConfig`에 ASYNC/ERROR 디스패치에 대한 permitAll 추가.
+```java
+.dispatcherTypeMatchers(DispatcherType.ASYNC, DispatcherType.ERROR).permitAll()
+```
+
+### 8.2 N+1 쿼리 문제 (30+ → 12 쿼리)
+
+**증상**: 채팅 메시지 1건 전송에 Hibernate SQL이 30개 이상 발생. `show-sql: true` 로그로 확인.
+
+**원인**: JPA LAZY 로딩 체인이 여러 곳에서 개별 SELECT을 유발.
+- `chat.getMember()` — 소유권 검증 시마다 member 단건 조회
+- `message.getTurn().getChat()` — message → turn → chat 체인
+- `turn.getMessages()` — 턴 목록 조회 시 각 turn의 messages 개별 로딩
+
+**해결**: fetch join 쿼리 도입.
+- `ChatRepository.findByIdWithMemberAndDeletedAtIsNull` — `JOIN FETCH c.member`
+- `MessageRepository.findByIdWithTurnAndChat` — `JOIN FETCH m.turn t JOIN FETCH t.chat`
+- `TurnRepository` — cursor 페이징에 `LEFT JOIN FETCH t.messages` 변형 3개
+
+모든 Service의 조회를 fetch join 버전으로 교체하여 **30+ → 12 쿼리**(전부 필수 CRUD)로 감소.
+
+### 8.3 SSE 엔드포인트 에러 응답 500
+
+**증상**: 재생성/수정 API에서 비즈니스 에러(예: STREAMING 상태 메시지) 발생 시, 프론트에 `409`가 아닌 `500`이 반환됨.
+
+**원인**: Controller의 `produces = MediaType.TEXT_EVENT_STREAM_VALUE`만 선언되어 있어, `GlobalExceptionHandler`가 JSON 에러 응답을 생성하려 해도 `HttpMediaTypeNotAcceptableException`이 발생하여 500으로 변환됨.
+
+**해결**: SSE 엔드포인트의 `produces`에 `APPLICATION_JSON_VALUE`를 추가하여 에러 시 JSON 응답이 가능하도록 수정.
+```java
+@PostMapping(value = "/{messageId}/regenerate",
+    produces = {MediaType.TEXT_EVENT_STREAM_VALUE, MediaType.APPLICATION_JSON_VALUE})
+```
+
+### 8.4 프론트엔드 Zod 스키마 불일치 (title nullable)
+
+**증상**: 백엔드에서 채팅 생성 API가 정상 응답(200)을 반환하지만, 프론트에서 응답을 무시하고 아무 동작도 하지 않음. 에러 메시지도 없음.
+
+**원인**: Phase 3에서 `chat.title`을 nullable로 변경했으나, 프론트의 Zod 스키마가 `title: z.string()`으로 되어 있어 `null` 값이 validation에 실패. catch 블록에서 에러가 조용히 무시됨.
+
+**해결**: 프론트 Zod 스키마에서 `title: z.string()` → `title: z.string().nullable()`로 수정.
+
+### 8.5 turn_started에 chatId 누락
+
+**증상**: 프론트에서 재생성 버튼을 눌러도 SSE 스트리밍은 정상 수신되지만, 화면에 표시되지 않음. 3번 연속 누르면 동작.
+
+**원인**: 프론트의 `useRegenerate` 훅이 `turn_started` 이벤트의 `chatId` 필드로 대상 chat을 식별하는데, 백엔드 `TurnStarted` DTO에 `chatId`가 없어서 `null` → 이후 모든 이벤트(chunk, done)가 무시됨. 3번째 시도에서 타이밍상 동작하는 것은 이전 시도의 상태가 누적된 부작용.
+
+**해결**: `MessageResDto.TurnStarted`에 `chatId` 필드를 추가하고, `streamMessage()`에서 `ctx.chat().getId()`를 전달.
+
+### 8.6 재생성 시 STREAMING 상태 충돌
+
+**증상**: 재생성 중인 메시지에 다시 재생성을 요청하면 `MESSAGE_4092` 에러(→ §8.3에 의해 500) 발생.
+
+**원인**: `regenerateMessage()`에서 `message.getStatus() == MessageStatus.STREAMING`이면 무조건 거부하도록 되어 있었음. 재생성은 기존 AI 메시지를 STREAMING으로 변경하므로, 스트리밍 완료 전에 다시 재생성하면 항상 거부됨.
+
+**해결**: STREAMING 상태에서는 기존 스트리밍을 cancel(`StreamingContext.canceled.set(true)`)한 후 새로 시작하도록 변경. 에러 대신 이전 응답을 중단하고 새 응답을 시작.
+
+---
+
+## 9. 미구현/보류 사항
 
 | 항목 | 사유 |
 |------|------|

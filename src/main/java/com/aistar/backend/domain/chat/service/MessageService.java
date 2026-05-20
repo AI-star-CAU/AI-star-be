@@ -108,6 +108,7 @@ public class MessageService {
 
                 // 1. turn_started
                 sendEvent(emitter, "turn_started", MessageResDto.TurnStarted.builder()
+                        .chatId(ctx.chat().getId())
                         .turnId(ctx.turn().getId())
                         .userMessageId(ctx.userMessage().getId())
                         .aiMessageId(aiMessageId)
@@ -288,8 +289,13 @@ public class MessageService {
         if (message.getSenderType() != SenderType.ASSISTANT) {
             throw new ProjectException(ErrorStatus.MESSAGE_ACTION_NOT_ALLOWED);
         }
+
+        // STREAMING 중이면 기존 스트리밍을 cancel한 후 진행
         if (message.getStatus() == MessageStatus.STREAMING) {
-            throw new ProjectException(ErrorStatus.MESSAGE_ACTION_NOT_ALLOWED);
+            StreamingContext streamCtx = streamingContexts.get(messageId);
+            if (streamCtx != null) {
+                streamCtx.canceled().set(true);
+            }
         }
 
         Turn targetTurn = message.getTurn();
