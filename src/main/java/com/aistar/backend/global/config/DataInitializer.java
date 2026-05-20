@@ -89,7 +89,7 @@ public class DataInitializer implements ApplicationRunner {
         // ── Chat 3: 빈 채팅 (턴 없음) ──
         Chat chat3 = chatRepository.save(Chat.builder()
                 .member(member)
-                .title("제목없음")
+                .title(null)
                 .llmProvider(LlmProvider.ANTHROPIC)
                 .llmModel(LlmModel.CLAUDE_3_5_SONNET)
                 .build());

@@ -337,7 +337,7 @@ public class MessageService {
 
     private TurnContext createBranchTurn(Chat sourceChat, Turn branchPointTurn, String userContent) {
         Chat branch = Chat.builder()
-                .title("새 분기")
+                .title(null)
                 .titleStatus(TitleStatus.PENDING)
                 .llmProvider(sourceChat.getLlmProvider())
                 .llmModel(sourceChat.getLlmModel())

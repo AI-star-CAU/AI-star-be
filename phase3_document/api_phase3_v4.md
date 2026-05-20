@@ -1,7 +1,7 @@
 # Phase 3 API 명세서
 
 **문서 식별자:** API-AIT-P3  
-**버전:** 0.4  
+**버전:** 0.5  
 **작성일:** 2026-05-18 
 **대상 Phase:** Phase 3 (W12~W13) — 분기 관리 + 그래프 시각화  
 **범위:** FG-2 분기 관리, FG-3 그래프 시각화, FR-1.4 응답 재생성, FR-1.5 사용자 메시지 수정  
@@ -80,13 +80,15 @@ ALTER TABLE turn
 
 -- chat 테이블 보강
 ALTER TABLE chat
+  MODIFY COLUMN title TEXT NULL,
   ADD COLUMN last_turn_id BIGINT NULL,
   ADD COLUMN title_status ENUM('PENDING', 'GENERATED', 'USER_EDITED')
     NOT NULL DEFAULT 'PENDING';
 
--- turn 요약 상태 정책 정리
+-- title / summary nullable 정책 정리
+-- title은 제목 미지정·자동 생성 전 상태를 표현하기 위해 NULL 허용.
 -- summary는 요약 생성 전 상태를 표현하기 위해 NULL 허용 (위 ALTER로 이미 nullable).
--- 화면 기본 문구("제목없음", "요약 생성 중")는 클라이언트/DTO(데이터 전송 객체)에서 처리하고 DB에는 저장하지 않는다.
+-- 화면 기본 문구("제목없음", "요약 생성 중", "새 분기")는 클라이언트/DTO(데이터 전송 객체)에서 처리하고 DB에는 저장하지 않는다.
 
 -- usage_record 테이블 보강 (이력 보존)
 -- 신규 컬럼은 마이그레이션 호환성을 위해 NULL/DEFAULT 허용, 신규 row 생성 시에는 반드시 채움.
@@ -111,6 +113,7 @@ CREATE INDEX idx_message_turn       ON message(turn_id);
 | `turn.Summary` → `summary` | MySQL/ORM 매핑 일관성. 대문자/소문자 혼용 제거. |
 | `chat.last_turn_id` | FR-6.2 정렬 최적화. 사이드바 미리보기는 last_turn의 summary 재사용 (별도 preview 컬럼 미도입). |
 | `chat.title_status` | FR-2.2 + 비동기 자동 명명 도입에 따른 상태 구분. |
+| `chat.title` nullable 변경 | title 값이 NULL이면 제목 미지정·자동 생성 전(PENDING) 상태. DB 기본 문구 저장 금지. |
 | `turn.summary` nullable 정책 | summary 값이 NULL이면 요약 생성 전(PENDING) 상태. DB 기본 문구 저장 금지. |
 | `usage_record.token_limit` | 그 기간 시점의 토큰 한도 스냅샷. 플랜 정책 변경·사용자 플랜 변경 이력 보존. |
 | `usage_record.plan_id` | 해당 기간에 적용된 플랜 추적. subscription 이력을 거치지 않고 직접 조회. |
@@ -119,7 +122,7 @@ CREATE INDEX idx_message_turn       ON message(turn_id);
 
 > frontier 및 edge는 DB에 저장하지 않는다. 둘 다 조회 시점 계산값이다.
 
-> `turn.summary`는 nullable로 관리한다. summary 값이 NULL이면 요약 생성 전 상태이며, API 응답의 `summaryStatus`는 `PENDING`이다. "제목없음" 같은 화면용 기본 문구는 클라이언트 또는 DTO 조립 단계에서만 사용하고 DB에는 저장하지 않는다.
+> `chat.title`은 nullable로 관리한다. title 값이 NULL이면 제목 미지정·자동 생성 전(PENDING) 상태이며, 화면용 기본 문구("제목없음", "새 분기")는 클라이언트 또는 DTO 조립 단계에서만 사용하고 DB에는 저장하지 않는다. `turn.summary`도 동일 정책이며, summary 값이 NULL이면 요약 생성 전 상태, API 응답의 `summaryStatus`는 `PENDING`이다.
 
 > **Phase 2 코드와의 호환성:** Phase 2에서 이미 `aichat_session_id`나 `Summary`를 참조하는 코드가 있으면 이번에 같이 수정해야 한다. ORM 엔티티 클래스, Repository 메서드, 직접 작성한 SQL 모두 새 컬럼명으로 갱신할 것.
 
@@ -152,7 +155,7 @@ Content-Type: application/json
 | 필드 | 타입 | 필수 | 설명 |
 |---|---|---|---|
 | `branchPointTurnId` | Long | ✓ | 분기 시작 지점 turn |
-| `title` | String? | | 사용자가 직접 지정하면 즉시 적용 (`titleStatus = USER_EDITED`). null이면 임시명 "새 분기" + 비동기 명명 |
+| `title` | String? | | 사용자가 직접 지정하면 즉시 적용 (`titleStatus = USER_EDITED`). null이면 `title = NULL`, `titleStatus = PENDING` + 비동기 명명 |
 
 ```json
 {
@@ -171,7 +174,7 @@ Content-Type: application/json
 | `rootChatId` | Long | 분기 트리의 루트 (부모로부터 상속) |
 | `parentId` | Long | 부모 chat의 ID (= 요청 path의 `chatId`) |
 | `branchPointTurnId` | Long | 분기점 turn |
-| `title` | String | `titleStatus`에 따라 임시명 또는 사용자 지정명 |
+| `title` | String? | PENDING이면 null, 그 외에는 실제 제목 |
 | `titleStatus` | Enum<"PENDING" \| "GENERATED" \| "USER_EDITED"> | |
 | `llmProvider` | Enum | 부모 chat에서 상속 |
 | `llmModel` | Enum | 부모 chat에서 상속 |
@@ -188,7 +191,7 @@ Content-Type: application/json
     "rootChatId": 42,
     "parentId": 42,
     "branchPointTurnId": 105,
-    "title": "새 분기",
+    "title": null,
     "titleStatus": "PENDING",
     "llmProvider": "OPENAI",
     "llmModel": "gpt-4o-mini",
@@ -203,7 +206,7 @@ Content-Type: application/json
 동기 처리(응답 전):
 1. `branchPointTurnId`의 존재·소유권 검증
 2. 새 `chat` row 생성 — `parent_id`, `branch_point_turn_id`, `root_chat_id` 설정
-3. `title_status = PENDING`, `title = "새 분기"` (사용자 지정 시 즉시 `USER_EDITED`)
+3. `title_status = PENDING`, `title = NULL` (사용자 지정 시 즉시 `title = 지정값`, `title_status = USER_EDITED`)
 4. 응답 반환
 
 비동기 처리(응답 후):
@@ -740,7 +743,7 @@ SSE 이벤트 시퀀스는 Phase 2 §2.5의 메시지 송신과 동일한 패턴
 
 ```
 event: branch_created
-data: {"newChatId": 88, "branchPointTurnId": 104, "title": "새 분기", "titleStatus": "PENDING"}
+data: {"newChatId": 88, "branchPointTurnId": 104, "title": null, "titleStatus": "PENDING"}
 
 event: turn_started
 data: {"turnId": 200, "userMessageId": 400, "aiMessageId": 401}
@@ -884,7 +887,7 @@ SSE 흐름은 §4.1 응답 재생성과 동일. `branch_created` → `turn_start
 ```
 1. 사용자가 turn 105 위에서 "여기서 분기" 클릭
    → POST /api/v1/chats/42/branches { branchPointTurnId: 105 }
-   ← 201 { chatId: 87, title: "새 분기", titleStatus: "PENDING", ... }
+   ← 201 { chatId: 87, title: null, titleStatus: "PENDING", ... }
 
 2. 프론트가 그래프 갱신을 위해 재조회
    → GET /api/v1/chats/42/graph?centerTurnId=105
@@ -1030,3 +1033,4 @@ Phase 2 §4 ERD ↔ API 매핑에 다음을 추가한다.
 | 0.2 | 2026-05-18 | 리뷰 반영. centerTurnId 명칭 통일, 재생성/수정 첫 turn edge case 정의, SSE summary 비동기화, expand includeDeleted 추가, cascade 복구 정책 보강, parent API 제거, endpoint 우선순위 추가. |
 | 0.3 | 2026-05-18 | 추가 리뷰 반영. Summary NULL/PENDING 정책 명시, window 밖 branch의 collapsed handle 렌더링 규칙 추가, 비동기 title worker의 USER_EDITED 덮어쓰기 방지 조건 추가, expand fromTurnId 검증 조건 보강. |
 | 0.4 | 2026-05-18 | ERD 컬럼명 정리 (`aichat_session_id` → `chat_id`, `Summary` → `summary`). collapsed handle 클릭 시 centerTurnId 결정 우선순위 명확화. collapsed 정보 계산 책임을 클라이언트로 명시. expand 에러 케이스 보강(`includeDeleted=false`인데 fromTurnId가 삭제된 chat에 속한 경우). 본문 가독성 개선: "골격" → "분기 구조/분기 메타데이터", "홉" → "단계"로 정리하고 일부 전공 용어에 괄호 풀이 추가. |
+| 0.5 | 2026-05-20 | `chat.title` nullable 정책 변경: `NOT NULL DEFAULT '제목없음'` → `NULL`. 제목 미지정·자동 생성 전 상태를 null로 표현하고 화면용 기본 문구("제목없음", "새 분기")는 DB에 저장하지 않음. ERD §1, 처리 흐름, 응답 예시 일괄 반영. |

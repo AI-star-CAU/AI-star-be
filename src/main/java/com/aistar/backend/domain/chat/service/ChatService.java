@@ -38,7 +38,7 @@ public class ChatService {
                 .orElseThrow(() -> new ProjectException(ErrorStatus.MEMBER_NOT_FOUND));
 
         Chat chat = Chat.builder()
-                .title(dto.title() != null ? dto.title() : "제목없음")
+                .title(dto.title())
                 .titleStatus(dto.title() != null ? TitleStatus.USER_EDITED : TitleStatus.PENDING)
                 .llmProvider(dto.llmProvider())
                 .llmModel(dto.llmModel())
@@ -91,7 +91,7 @@ public class ChatService {
         boolean userProvidedTitle = dto.title() != null && !dto.title().isBlank();
 
         Chat branch = Chat.builder()
-                .title(userProvidedTitle ? dto.title() : "새 분기")
+                .title(userProvidedTitle ? dto.title() : null)
                 .titleStatus(userProvidedTitle ? TitleStatus.USER_EDITED : TitleStatus.PENDING)
                 .llmProvider(parentChat.getLlmProvider())
                 .llmModel(parentChat.getLlmModel())

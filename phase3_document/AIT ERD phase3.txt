@@ -31,7 +31,7 @@ CREATE TABLE `message` (
 CREATE TABLE `chat` (
 	`chat_id`	bigint	NOT NULL,
 	`root_chat_id`	bigint	NULL,
-	`title`	text	NOT NULL	DEFAULT 제목없음,
+	`title`	text	NULL,
 	`title_status`	enum	NOT NULL	DEFAULT PENDING	COMMENT 'PENDING, GENERATED, USER_EDITED',
 	`created_at`	timestamp	NOT NULL	DEFAULT now(),
 	`updated_at`	timestamp	NOT NULL	DEFAULT now(),

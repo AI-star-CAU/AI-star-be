@@ -32,9 +32,8 @@ public class Chat extends BaseEntity {
     @Column(name = "root_chat_id")
     private Long rootChatId;
 
-    @Column(name = "title", nullable = false, columnDefinition = "TEXT")
-    @Builder.Default
-    private String title = "제목없음";
+    @Column(name = "title", columnDefinition = "TEXT")
+    private String title;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "title_status", nullable = false)
