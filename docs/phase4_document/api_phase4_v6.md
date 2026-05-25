@@ -1,7 +1,7 @@
 # Phase 4 API 명세서
 
 **문서 식별자:** API-AIT-P4  
-**버전:** 0.5  
+**버전:** 0.6  
 **작성일:** 2026-05-25  
 **대상 Phase:** Phase 4 (W14) — 대화 기록 파일 시스템 + 맥락 관리  
 **범위:** FG-4 대화 기록 파일 시스템 (FR-4.2, FR-4.3), FG-5 맥락 관리 (FR-5.1, FR-5.2, FR-5.3)  
@@ -70,17 +70,9 @@ Phase 4는 다음 다섯 가지 원칙 위에서 설계된다.
 
 Phase 4에서 Phase 3 ERD(`ait_erd_phase3`) 대비 다음 변경분이 적용된다. 엔티티 관계는 그대로이며 컬럼·인덱스만 추가된다. 통합된 전체 스키마는 `AIT_ERD_phase4.txt` 파일을 참조한다.
 
+### 1.1 컬럼·인덱스 변경
+
 ```sql
--- usage_record 활성화 (Phase 3까지는 정의만, 사용 안 함)
--- 기존 컬럼은 그대로 사용. 추가 컬럼:
-ALTER TABLE usage_record
-    ADD COLUMN compressed_turn_count INT NOT NULL DEFAULT 0
-        COMMENT 'FR-5.2 압축이 적용된 누적 turn 수 (관측용)';
-
--- message에 압축 추적용 컬럼 추가 (어떤 turn이 LLM 입력에서 summary로 치환되었는지)
--- 본문은 보존하므로 message 자체는 변경 없음. context 조립 시 메모리에서만 결정.
--- → DB 변경 없음.
-
 -- chat에 마지막 활동 시각 캐시 추가 (탐색기 정렬 성능용)
 -- 2단계 마이그레이션: 일단 NULL 허용으로 추가 → 백필 → NOT NULL로 변경
 ALTER TABLE chat
@@ -100,12 +92,32 @@ SET last_activity_at = COALESCE(
 ALTER TABLE chat
     MODIFY COLUMN last_activity_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP;
 
+-- usage_record에 압축 누적 카운터 추가
+ALTER TABLE usage_record
+    ADD COLUMN compressed_turn_count INT NOT NULL DEFAULT 0
+        COMMENT 'FR-5.2 압축이 적용된 누적 turn 수 (관측용)';
+
 -- usage_record 조회 인덱스
 CREATE INDEX idx_usage_member_period
     ON usage_record(member_id, period_end DESC);
 ```
 
-**`last_activity_at` 초기값 및 갱신 정책:**
+### 1.2 Phase 3 ERD 표기 정리 (스키마 정의는 동일)
+
+Phase 4 ERD 파일을 만들면서 Phase 3 ERD에 남아 있던 표기·정책 모호성 두 건을 함께 정리한다. **데이터 의미 변경은 없으며, 정책을 명문화하는 변경이다.**
+
+- **`chat.last_turn_id`** — `DEFAULT 0` 제거. `turn_id = 0`인 turn은 존재하지 않으므로 의미 없는 기본값이었다. `last_turn_id bigint NULL`로 변경. 신규 생성 chat은 NULL로 시작하고 첫 turn 저장 시 갱신한다.
+- **`chat.root_chat_id`** — `NULL` → `NOT NULL`. Phase 3까지는 root chat이면 NULL, branch이면 root id를 저장하는 정책이었으나, 탐색기·그래프 쿼리가 `root_chat_id IN (:pagedRootIds)` 한 줄로 처리되도록 **root chat도 자기 `chat_id`를 `root_chat_id`에 저장**하는 방식으로 통일한다. JPA 구현 시 생성 트랜잭션 내에서 다음 흐름으로 처리한다:
+  1. `chat` 엔티티 저장 (PK 채번)
+  2. 같은 트랜잭션에서 `root_chat_id = chat_id`로 self-update (root chat인 경우)
+  3. branch 생성 시에는 부모의 `root_chat_id`를 그대로 복사
+
+### 1.3 FK 제약 관리 방식
+
+본 ERD에는 PK·인덱스만 명시되며 FK 제약은 명시하지 않는다. FK 관계(`turn.chat_id → chat`, `message.turn_id → turn`, `chat.parent_id → chat`, `chat.branch_point_turn_id → turn`, `usage_record.plan_id → plan` 등)는 **JPA 연관관계(`@ManyToOne`, `@JoinColumn`)로 관리**한다. 실제 DDL은 JPA가 생성하거나 별도의 마이그레이션 도구가 처리한다.
+
+### 1.4 `last_activity_at` 초기값 및 갱신 정책
+
 - chat 생성 시 `created_at`과 동일한 값으로 초기화한다. **null 허용하지 않음.** 빈 chat도 `recent` 정렬에서 자연스러운 위치(생성 시각 기준)에 노출되어야 한다. 본 컬럼이 null이면 Phase 2에서 발생할 수 있는 빈 채팅(`POST /chats` 성공 후 `POST /messages` 실패)이 정렬 맨 뒤로 영구히 밀린다.
 - 다음 이벤트가 발생할 때마다 해당 chat과 그 **ancestor chain 전체**의 `last_activity_at`을 `now()`로 갱신한다 (`max(기존, now())` 가드, 동일 트랜잭션 내).
   - 메시지 송신 (Phase 2 `POST /messages`)
@@ -119,7 +131,7 @@ CREATE INDEX idx_usage_member_period
 
 > 본 컬럼이 없으면 탐색기 응답이 chat 트리 전체에 대해 N+1 형태로 마지막 turn 시각을 조회해야 하므로 NFR-P-2 충족이 어렵다.
 
-### 1.1 ERD ↔ API 매핑 (Phase 4 추가분)
+### 1.5 ERD ↔ API 매핑 (Phase 4 추가분)
 
 | ERD 컬럼 | API 필드 | 비고 |
 |---|---|---|
@@ -805,3 +817,4 @@ GROUP BY chat_id;
 | 0.3 | 2026-05-24 | 리뷰 2차 반영. (1) `last_activity_at` ALTER SQL을 NOT NULL 강제와 일관되도록 2단계 마이그레이션(ADD NULL → 백필 → MODIFY NOT NULL)으로 변경. v0.2의 본문/SQL 내부 충돌 해소. (2) §2.1 처리 규칙 4번의 "페이징된 root 각각" 표현 제거. `root_chat_id IN (:pagedRootIds)` 단일 쿼리로 일괄 조회한다는 §8.2 SQL 예시와 일치하도록 명시화. (3) `last_activity_at` 갱신 시점 확장 — 메시지 송신·재생성·수정에 더해 **branch 생성**, branch 복구, chat 제목 수정을 포함. branch 삭제는 갱신 대상에서 제외(사용자 모델과 정합). branch 생성 시 부모 root가 정렬에서 묻히는 문제 해결. (4) §3.3 `/usage/me`의 FR 우선순위 표기를 SRS 우선순위(권장)와 Phase 4 구현 우선순위(필수)로 분리. (5) §3.2 압축 실패 후 LLM 호출 정책 명확화 — provider의 `context_length_exceeded`는 Phase 2·3과 동일하게 `LLM_5001`로 매핑하고, 서버 로그에 `context_overflow_after_compression` 라벨로 경고 기록. MVP 정책으로 사전 차단 대신 시도 후 통과. |
 | 0.4 | 2026-05-24 | 리뷰 3차 반영 — 문서/SQL 표현 일관성 정리. (1) §4 처리 시점 표의 "root당 1쿼리" 표현 정정 — v0.3에서 §2.1·§8.2를 IN 쿼리로 통일했으나 §4 표만 누락된 잔존 표현. "페이징된 root 묶음 1쿼리 (`root_chat_id IN (:pagedRootIds)`) + turn count `GROUP BY` 1쿼리"로 명시. (2) §8.2 SQL 예시의 `ORDER BY last_activity_at DESC NULLS LAST` 제거 — `last_activity_at`이 NOT NULL이므로 NULLS 처리 불필요하며 MySQL은 표준 `NULLS LAST` 키워드를 미지원. `ORDER BY last_activity_at DESC, chat_id DESC`로 변경. (3) §2.1 `name` 정렬 규칙을 MySQL/JPA 호환 표현으로 변경 — `title ASC NULLS LAST` 대신 자연어 설명("title이 null인 항목은 마지막에 배치")과 구현 예 `ORDER BY (title IS NULL) ASC, LOWER(title) ASC, chat_id DESC` 병기. |
 | 0.5 | 2026-05-25 | ERD 표기 정리. (1) 기준 ERD 표기를 내부 버전 `ait_erd_v2.2`에서 파일명 기반 `ait_erd_phase4`로 변경. Phase 2·3 명세서가 사용한 `ait_erd_v2`, `ait_erd_v2.1` 표기 대신 phase 명을 직접 쓰는 방식으로 통일하여 ERD 파일과 명세서 간 매칭을 명확화. (2) §1 제목을 "ERD v2.2 변경분"에서 "ERD 변경분 (Phase 3 → Phase 4)"으로 변경. 본문에 통합 스키마 파일 `AIT_ERD_phase4.txt` 참조 명시. **스키마 정의 자체는 변경 없음** — v0.4와 동일하게 `chat.last_activity_at`, `usage_record.compressed_turn_count` 추가 및 인덱스 2개 유지. |
+| 0.6 | 2026-05-25 | ERD 리뷰 반영 — Phase 3 ERD에 남아 있던 정책 모호성 정리. (1) `chat.last_turn_id`의 `DEFAULT 0` 제거. `turn_id = 0`은 존재하지 않는 의미 없는 기본값. `NULL`로 시작하고 첫 turn 저장 시 갱신한다. (2) `chat.root_chat_id`를 `NULL` → `NOT NULL`로 변경하고 **root chat도 자기 `chat_id`를 저장**하도록 정책 통일. 탐색기·그래프 쿼리가 `root_chat_id IN (:pagedRootIds)` 한 줄로 처리되도록 단순화. JPA 구현 시 생성 트랜잭션 내 self-update 흐름 명문화. (3) §1.3 FK 관리 방식 추가 — FK 제약은 ERD에 명시하지 않고 JPA 연관관계(`@ManyToOne`, `@JoinColumn`)로 관리한다는 점을 명문화. (4) ERD 파일의 SQL 표기 정리 — `String(20)` → `varchar(20)`, enum 컬럼들의 허용값을 `enum('VAL1', 'VAL2', ...)` 형식으로 명시. 스키마 정의 자체는 동일하며 표기만 SQL 친화적으로 변경. |
