@@ -4,7 +4,7 @@
 
 Phase 2(Walking Skeleton)에서 구현한 기본 대화 기능 위에, **분기(Branch) 트리 구조**와 **그래프 시각화 API**를 추가하여 대화 이력을 트리 형태로 관리할 수 있도록 확장하였다.
 
-**명세서**: `api_phase3_v4.md` (v0.7)  
+**명세서**: `api_phase3_v4.md` (v0.8)  
 **ERD**: `AIT ERD phase3.txt / .png`
 
 ---
@@ -63,7 +63,7 @@ root(chat_id=1)
 
 두 기능은 서로 다른 전략을 사용한다.
 
-**응답 재생성** (`regenerateMessage`): 새 분기를 생성하지 않고, **기존 Turn의 AI 메시지를 초기화하여 새 LLM 응답으로 덮어쓴다**. Turn 수도, Chat 수도 변하지 않는다.
+**응답 재생성** (`regenerateMessage`): 새 분기를 생성하지 않고, **기존 Turn의 AI 메시지를 초기화하여 새 LLM 응답으로 덮어쓴다**. Turn 수도, Chat 수도 변하지 않는다. 마지막 턴뿐 아니라 **모든 ASSISTANT 메시지**에 대해 재생성이 허용되며, 어떤 메시지를 재생성할 수 있는지에 대한 UX 제한은 프론트엔드에서 처리한다.
 
 ```
 regenerateMessage(messageId)
@@ -182,7 +182,34 @@ Phase 3에서 `chat.title`을 **nullable**로 변경했다.
 | `TurnRepository` | `WithMessages` fetch join 변형 3개 추가 | cursor 페이징 시 turn→messages LAZY 로딩 제거 |
 | 모든 Service | 소유권 검증이 필요한 조회를 fetch join 버전으로 교체 | 불필요한 단건 SELECT 제거 |
 
-### 3.7 Spring Security 비동기 디스패치 수정
+### 3.7 Message 응답에 chatId 포함
+
+턴 목록 조회(`/chats/{chatId}/turns`) 응답의 `MessageItem`에 **`chatId` 필드**를 추가하여, 각 메시지가 실제로 속한 chat ID를 반환하도록 했다.
+
+**배경**: 분기(branch) 뷰에서는 부모 chat의 메시지도 함께 표시되지만, 해당 메시지들의 실제 소유 chat은 부모 chat이다. 프론트엔드가 재생성/수정 요청 시 branch의 chatId를 사용하면 `MESSAGE_4041`(메시지 없음) 에러가 발생한다.
+
+**변경 파일**:
+- `TurnResDto.MessageItem`: `chatId` 필드 추가
+- `TurnConverter.toMessageItem()`: `message.getTurn().getChat().getId()`로 매핑
+
+```java
+// TurnResDto.java — MessageItem에 chatId 추가
+@Builder
+public record MessageItem(
+        Long chatId,        // 메시지가 실제로 속한 chat ID
+        Long messageId,
+        SenderType senderType,
+        MessageStatus status,
+        String content,
+        Integer promptToken,
+        Integer answerToken,
+        LocalDateTime createdAt
+) {}
+```
+
+프론트엔드는 이 `chatId`를 사용하여 재생성/수정 API의 path parameter를 정확하게 설정해야 한다.
+
+### 3.8 Spring Security 비동기 디스패치 수정
 
 `SseEmitter`의 비동기 디스패치 시 Spring Security가 `SecurityContext`를 찾지 못해 `AuthorizationDeniedException`이 발생하는 문제를 수정했다.
 
@@ -534,6 +561,7 @@ com.aistar.backend
 | `2cca516` | N+1 쿼리 최적화 (fetch join), Security async dispatch 수정 |
 | `3691d94` | 명세서 v0.6 반영 |
 | `a0f0174` | 재생성 시 브랜치 생성 제거 — 기존 AI 메시지 덮어쓰기 방식으로 변경 |
+| `f8874f0` | AI 서버와 통합 — 실제 LLM API 연동 |
 
 ---
 
@@ -623,6 +651,14 @@ CREATE INDEX idx_message_turn       ON message(turn_id);
 
 **해결**: STREAMING 상태에서는 기존 스트리밍을 cancel(`StreamingContext.canceled.set(true)`)한 후 새로 시작하도록 변경. 에러 대신 이전 응답을 중단하고 새 응답을 시작.
 
+### 8.7 분기 뷰에서 재생성 시 chatId 불일치
+
+**증상**: 분기(branch) chat 화면에서 부모 chat의 메시지를 재생성하면 `MESSAGE_4041` (프론트에서 500으로 표시) 에러 발생.
+
+**원인**: 분기 chat(예: chatId=77)은 부모 chat(chatId=65)의 branchPointTurn까지의 메시지를 함께 표시한다. 프론트엔드가 모든 메시지에 대해 현재 활성 branch의 chatId(77)로 재생성 요청을 보내지만, 실제 메시지(예: messageId=70)는 부모 chat(65)에 속해 있다. 백엔드에서 `message.getTurn().getChat().getId() != chatId` 검증에 걸려 404가 반환된다.
+
+**해결**: `TurnResDto.MessageItem`에 `chatId` 필드를 추가하여 각 메시지의 실제 소유 chat ID를 반환 (§3.7). 프론트엔드는 branch의 chatId 대신 메시지 응답의 `chatId`를 사용하여 API를 호출해야 한다.
+
 ---
 
 ## 9. 미구현/보류 사항
@@ -630,4 +666,3 @@ CREATE INDEX idx_message_turn       ON message(turn_id);
 | 항목 | 사유 |
 |------|------|
 | `UsageRecord` 엔티티 | ERD에 정의되어 있으나 Phase 3까지 필요한 기능 없음 |
-| LLM 실제 연동 | MockLlmClient 사용 중, 실제 API 키 연동은 별도 진행 |

@@ -4,6 +4,16 @@ Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-s
 
 **Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
+## 0. Spec-Driven Development
+
+**명세서가 진실의 원천(source of truth)이다.**
+
+- 명세서·설계 문서는 `docs/` 디렉토리에 phase별로 정리되어 있다 (`docs/phase{N}_document/`).
+- 코드 작성/수정 전에 해당 phase의 명세서를 먼저 확인한다.
+- 명세서에 정의된 요청/응답 스키마, 처리 흐름, 에러 코드를 따른다.
+- 명세서와 코드가 충돌하면 먼저 보고하고, 어느 쪽을 기준으로 할지 확인받는다.
+- 코드 변경 후 명세서도 함께 갱신해야 하는지 항상 확인한다.
+
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
@@ -59,6 +69,18 @@ For multi-step tasks, state a brief plan:
 ```
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
+
+## 5. Concise Output
+
+**짧게 말해. 단, 파일 작성은 예외.**
+
+대화 응답:
+- 결론부터. 이유는 필요할 때만.
+- 한 문장으로 될 걸 세 문장으로 쓰지 마.
+- 코드 변경 후 요약 반복 금지 — diff가 말해줌.
+- 테이블·목록은 좋지만 장황한 설명은 금지.
+
+파일 작성(명세서, summary.md 등)은 이 규칙에서 제외 — 문서는 완전한 문장과 충분한 설명을 유지.
 
 ---
 

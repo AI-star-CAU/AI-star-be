@@ -68,3 +68,8 @@ oracleJdk-*/
 ai-test.json
 
 *.xlsx
+
+.agents/
+.claude/skills/
+skills-lock.json
+CLAUDE.md
