@@ -40,6 +40,13 @@ public interface TurnRepository extends JpaRepository<Turn, Long> {
     @Query("SELECT DISTINCT t FROM Turn t LEFT JOIN FETCH t.messages WHERE t.chat.id = :chatId AND t.turnSequence > :seq ORDER BY t.turnSequence ASC")
     List<Turn> findByChatIdAndTurnSequenceGreaterThanWithMessages(@Param("chatId") Long chatId, @Param("seq") int seq, org.springframework.data.domain.Pageable pageable);
 
+    // ── Context Assembly: chat의 turn_sequence <= maxSeq인 turn + messages 조회 ──
+    @Query("SELECT DISTINCT t FROM Turn t LEFT JOIN FETCH t.messages " +
+            "WHERE t.chat.id = :chatId AND t.turnSequence <= :maxSeq " +
+            "ORDER BY t.turnSequence ASC")
+    List<Turn> findByChatIdAndTurnSequenceLteWithMessages(
+            @Param("chatId") Long chatId, @Param("maxSeq") int maxSeq);
+
     // 특정 turn 단건 조회
     Optional<Turn> findByIdAndChatId(Long turnId, Long chatId);
 

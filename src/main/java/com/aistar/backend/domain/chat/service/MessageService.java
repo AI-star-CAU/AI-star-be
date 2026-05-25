@@ -36,6 +36,7 @@ public class MessageService {
     private final TurnRepository turnRepository;
     private final MessageRepository messageRepository;
     private final ChatService chatService;
+    private final ContextAssembler contextAssembler;
     private final AiServerClient aiServerClient;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
@@ -116,14 +117,18 @@ public class MessageService {
                         .aiMessageId(aiMessageId)
                         .build());
 
-                // 2. AI server streaming
+                // 2. 맥락 조립 (§3.1)
+                var contextMessages = contextAssembler.buildContext(
+                        ctx.chat(), ctx.turn(), ctx.userMessage().getContent());
+
+                // 3. AI server streaming
                 aiServerClient.streamChatCompletion(
                         new AiChatRequest(
                                 ctx.userMessage().getContent(),
                                 512,
                                 0.7,
                                 null,
-                                null
+                                contextMessages
                         ),
                         chunk -> {
                             if (streamCtx.canceled().get()) {
