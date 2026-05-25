@@ -32,7 +32,10 @@ public class MessageResDto {
             Long turnId,
             Long aiMessageId,
             Integer answerToken,
-            String summaryStatus
+            String summaryStatus,
+            Integer contextTokens,
+            Boolean compressionApplied,
+            Integer compressedTurnCount
     ) {}
 
     @Builder

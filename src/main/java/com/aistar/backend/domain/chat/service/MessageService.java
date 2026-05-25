@@ -117,9 +117,10 @@ public class MessageService {
                         .aiMessageId(aiMessageId)
                         .build());
 
-                // 2. 맥락 조립 (§3.1)
-                var contextMessages = contextAssembler.buildContext(
-                        ctx.chat(), ctx.turn(), ctx.userMessage().getContent());
+                // 2. 맥락 조립 + 압축 (§3.1, §3.2)
+                var contextResult = contextAssembler.buildContext(
+                        ctx.chat(), ctx.turn(), ctx.userMessage().getContent(),
+                        ctx.chat().getLlmModel());
 
                 // 3. AI server streaming
                 aiServerClient.streamChatCompletion(
@@ -128,7 +129,7 @@ public class MessageService {
                                 512,
                                 0.7,
                                 null,
-                                contextMessages
+                                contextResult.messages()
                         ),
                         chunk -> {
                             if (streamCtx.canceled().get()) {
@@ -154,6 +155,7 @@ public class MessageService {
                         message.updateContent(fullContent);
                         message.updateStatus(MessageStatus.COMPLETED);
                         message.updateAnswerToken(answerToken);
+                        message.updatePromptToken(contextResult.contextTokens());
                     }
                     Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
                     chat.updateLastTurnId(ctx.turn().getId());
@@ -166,6 +168,9 @@ public class MessageService {
                         .aiMessageId(aiMessageId)
                         .answerToken(answerToken)
                         .summaryStatus("PENDING")
+                        .contextTokens(contextResult.contextTokens())
+                        .compressionApplied(contextResult.compressionApplied())
+                        .compressedTurnCount(contextResult.compressedTurnCount())
                         .build());
 
                 sendDoneAndComplete(emitter);
