@@ -107,10 +107,7 @@ CREATE INDEX idx_usage_member_period
 Phase 4 ERD 파일을 만들면서 Phase 3 ERD에 남아 있던 표기·정책 모호성 두 건을 함께 정리한다. **데이터 의미 변경은 없으며, 정책을 명문화하는 변경이다.**
 
 - **`chat.last_turn_id`** — `DEFAULT 0` 제거. `turn_id = 0`인 turn은 존재하지 않으므로 의미 없는 기본값이었다. `last_turn_id bigint NULL`로 변경. 신규 생성 chat은 NULL로 시작하고 첫 turn 저장 시 갱신한다.
-- **`chat.root_chat_id`** — `NULL` → `NOT NULL`. Phase 3까지는 root chat이면 NULL, branch이면 root id를 저장하는 정책이었으나, 탐색기·그래프 쿼리가 `root_chat_id IN (:pagedRootIds)` 한 줄로 처리되도록 **root chat도 자기 `chat_id`를 `root_chat_id`에 저장**하는 방식으로 통일한다. JPA 구현 시 생성 트랜잭션 내에서 다음 흐름으로 처리한다:
-  1. `chat` 엔티티 저장 (PK 채번)
-  2. 같은 트랜잭션에서 `root_chat_id = chat_id`로 self-update (root chat인 경우)
-  3. branch 생성 시에는 부모의 `root_chat_id`를 그대로 복사
+- **`chat.root_chat_id`** — `NULL` 유지. root chat은 `initRootChatId()`로 save 직후 자기 `chat_id`를 저장하고, branch는 부모의 `root_chat_id`를 복사한다. `@GeneratedValue(IDENTITY)` 특성상 INSERT 시점에 ID를 알 수 없어 NOT NULL 제약을 걸면 임시값(0L) 우회가 필요하므로, JPA 컬럼은 nullable로 두고 앱 레벨에서 보장한다. 실질적으로 null인 row는 존재하지 않는다.
 
 ### 1.3 FK 제약 관리 방식
 
@@ -818,3 +815,4 @@ GROUP BY chat_id;
 | 0.4 | 2026-05-24 | 리뷰 3차 반영 — 문서/SQL 표현 일관성 정리. (1) §4 처리 시점 표의 "root당 1쿼리" 표현 정정 — v0.3에서 §2.1·§8.2를 IN 쿼리로 통일했으나 §4 표만 누락된 잔존 표현. "페이징된 root 묶음 1쿼리 (`root_chat_id IN (:pagedRootIds)`) + turn count `GROUP BY` 1쿼리"로 명시. (2) §8.2 SQL 예시의 `ORDER BY last_activity_at DESC NULLS LAST` 제거 — `last_activity_at`이 NOT NULL이므로 NULLS 처리 불필요하며 MySQL은 표준 `NULLS LAST` 키워드를 미지원. `ORDER BY last_activity_at DESC, chat_id DESC`로 변경. (3) §2.1 `name` 정렬 규칙을 MySQL/JPA 호환 표현으로 변경 — `title ASC NULLS LAST` 대신 자연어 설명("title이 null인 항목은 마지막에 배치")과 구현 예 `ORDER BY (title IS NULL) ASC, LOWER(title) ASC, chat_id DESC` 병기. |
 | 0.5 | 2026-05-25 | ERD 표기 정리. (1) 기준 ERD 표기를 내부 버전 `ait_erd_v2.2`에서 파일명 기반 `ait_erd_phase4`로 변경. Phase 2·3 명세서가 사용한 `ait_erd_v2`, `ait_erd_v2.1` 표기 대신 phase 명을 직접 쓰는 방식으로 통일하여 ERD 파일과 명세서 간 매칭을 명확화. (2) §1 제목을 "ERD v2.2 변경분"에서 "ERD 변경분 (Phase 3 → Phase 4)"으로 변경. 본문에 통합 스키마 파일 `AIT_ERD_phase4.txt` 참조 명시. **스키마 정의 자체는 변경 없음** — v0.4와 동일하게 `chat.last_activity_at`, `usage_record.compressed_turn_count` 추가 및 인덱스 2개 유지. |
 | 0.6 | 2026-05-25 | ERD 리뷰 반영 — Phase 3 ERD에 남아 있던 정책 모호성 정리. (1) `chat.last_turn_id`의 `DEFAULT 0` 제거. `turn_id = 0`은 존재하지 않는 의미 없는 기본값. `NULL`로 시작하고 첫 turn 저장 시 갱신한다. (2) `chat.root_chat_id`를 `NULL` → `NOT NULL`로 변경하고 **root chat도 자기 `chat_id`를 저장**하도록 정책 통일. 탐색기·그래프 쿼리가 `root_chat_id IN (:pagedRootIds)` 한 줄로 처리되도록 단순화. JPA 구현 시 생성 트랜잭션 내 self-update 흐름 명문화. (3) §1.3 FK 관리 방식 추가 — FK 제약은 ERD에 명시하지 않고 JPA 연관관계(`@ManyToOne`, `@JoinColumn`)로 관리한다는 점을 명문화. (4) ERD 파일의 SQL 표기 정리 — `String(20)` → `varchar(20)`, enum 컬럼들의 허용값을 `enum('VAL1', 'VAL2', ...)` 형식으로 명시. 스키마 정의 자체는 동일하며 표기만 SQL 친화적으로 변경. |
+| 0.7 | 2026-05-26 | 구현 리뷰 반영. `chat.root_chat_id`를 NOT NULL에서 **NULL 유지**로 변경. `@GeneratedValue(IDENTITY)` 특성상 INSERT 시점에 PK를 알 수 없어 NOT NULL 제약 시 임시값(0L) 우회가 필요하며, 이는 `initRootChatId()` 호출 누락 시 잘못된 쿼리 결과를 유발할 수 있다. 앱 레벨(`initRootChatId()`)에서 non-null을 보장하고 DDL은 nullable로 둔다. §1.2 및 ERD 파일 동시 수정. |

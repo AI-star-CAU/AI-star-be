@@ -59,4 +59,8 @@ public class Message {
     public void updateAnswerToken(Integer answerToken) {
         this.answerToken = answerToken;
     }
+
+    public void updatePromptToken(Integer promptToken) {
+        this.promptToken = promptToken;
+    }
 }

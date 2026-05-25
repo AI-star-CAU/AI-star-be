@@ -36,13 +36,21 @@ public enum ErrorStatus implements BaseErrorCode {
     BRANCH_INVALID(HttpStatus.BAD_REQUEST, "BRANCH_4001", "분기를 생성할 수 없는 turn입니다."),
     BRANCH_NOT_FOUND(HttpStatus.NOT_FOUND, "BRANCH_4041", "존재하지 않는 분기입니다."),
     BRANCH_ALREADY_DELETED(HttpStatus.CONFLICT, "BRANCH_4091", "이미 삭제된 분기입니다."),
-    BRANCH_RESTORE_EXPIRED(HttpStatus.CONFLICT, "BRANCH_4092", "복구 기간이 만료된 분기입니다."),
 
     // Turn
     TURN_NOT_FOUND(HttpStatus.NOT_FOUND, "TURN_4041", "존재하지 않는 turn입니다."),
 
     // Graph
     GRAPH_INVALID_PARAM(HttpStatus.BAD_REQUEST, "GRAPH_4001", "유효하지 않은 그래프 조회 파라미터입니다."),
+
+    // Explorer
+    EXPLORER_INVALID_PARAM(HttpStatus.BAD_REQUEST, "EXPLORER_4001", "유효하지 않은 탐색기 조회 파라미터입니다."),
+
+    // Context
+    CONTEXT_INVALID_PARAM(HttpStatus.BAD_REQUEST, "CONTEXT_4001", "유효하지 않은 맥락 조회 파라미터입니다."),
+
+    // Usage
+    USAGE_NOT_FOUND(HttpStatus.NOT_FOUND, "USAGE_4041", "사용량 기록을 찾을 수 없습니다."),
 
     // LLM
     LLM_CALL_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "LLM_5001", "LLM 서비스 호출에 실패했습니다."),

@@ -12,6 +12,10 @@ import com.aistar.backend.domain.chat.repository.MessageRepository;
 import com.aistar.backend.domain.chat.repository.TurnRepository;
 import com.aistar.backend.domain.member.entity.Member;
 import com.aistar.backend.domain.member.repository.MemberRepository;
+import com.aistar.backend.domain.usage.entity.Plan;
+import com.aistar.backend.domain.usage.entity.UsageRecord;
+import com.aistar.backend.domain.usage.repository.PlanRepository;
+import com.aistar.backend.domain.usage.repository.UsageRecordRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.ApplicationArguments;
@@ -19,6 +23,8 @@ import org.springframework.boot.ApplicationRunner;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.math.BigDecimal;
 
 @Slf4j
 @Component
@@ -29,6 +35,8 @@ public class DataInitializer implements ApplicationRunner {
     private final ChatRepository chatRepository;
     private final TurnRepository turnRepository;
     private final MessageRepository messageRepository;
+    private final PlanRepository planRepository;
+    private final UsageRecordRepository usageRecordRepository;
     private final PasswordEncoder passwordEncoder;
 
     @Override
@@ -95,7 +103,27 @@ public class DataInitializer implements ApplicationRunner {
                 .build());
         chat3.initRootChatId();
 
-        log.info("더미 데이터 생성 완료 — member 1명, chat 3개, turn 5개");
+        // ── Plan + UsageRecord ──
+        Plan freePlan = planRepository.save(Plan.builder()
+                .name("Free")
+                .price(BigDecimal.ZERO)
+                .maxProject(3)
+                .maxDepth(5)
+                .maxFileSize(10_000_000L)
+                .aiLimit(500_000L)
+                .description("무료 플랜")
+                .build());
+
+        java.time.LocalDateTime now = java.time.LocalDateTime.now();
+        usageRecordRepository.save(UsageRecord.builder()
+                .member(member)
+                .plan(freePlan)
+                .periodStart(now.withDayOfMonth(1).toLocalDate().atStartOfDay())
+                .periodEnd(now.withDayOfMonth(1).plusMonths(1).toLocalDate().atStartOfDay())
+                .tokenLimit(freePlan.getAiLimit())
+                .build());
+
+        log.info("더미 데이터 생성 완료 — member 1명, chat 3개, turn 5개, plan 1개, usage_record 1개");
     }
 
     private void createTurn(Chat chat, int sequence, String userContent, String aiContent) {

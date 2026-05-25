@@ -103,6 +103,8 @@ public class ChatService {
 
         chatRepository.save(branch);
 
+        touchAncestorChain(chatId);
+
         return ChatConverter.toDetail(branch);
     }
 
@@ -111,6 +113,7 @@ public class ChatService {
         Chat chat = findChatOrThrow(chatId);
         validateOwner(chat, memberId);
         chat.updateTitle(dto.title());
+        touchAncestorChain(chatId);
         return ChatConverter.toDetail(chat);
     }
 
@@ -135,6 +138,17 @@ public class ChatService {
             if (child.getDeletedAt() == null) {
                 softDeleteCascade(child);
             }
+        }
+    }
+
+    @Transactional
+    public void touchAncestorChain(Long chatId) {
+        Long currentId = chatId;
+        while (currentId != null) {
+            Chat chat = chatRepository.findById(currentId).orElse(null);
+            if (chat == null) break;
+            chat.touchLastActivityAt();
+            currentId = chat.getParentId();
         }
     }
 

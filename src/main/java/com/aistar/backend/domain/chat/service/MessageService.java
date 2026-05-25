@@ -35,6 +35,7 @@ public class MessageService {
     private final ChatRepository chatRepository;
     private final TurnRepository turnRepository;
     private final MessageRepository messageRepository;
+    private final ChatService chatService;
     private final AiServerClient aiServerClient;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
@@ -152,6 +153,7 @@ public class MessageService {
                     Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
                     chat.updateLastTurnId(ctx.turn().getId());
                     chat.touchUpdatedAt();
+                    chatService.touchAncestorChain(ctx.chat().getId());
                 });
 
                 sendEvent(emitter, "turn_completed", MessageResDto.TurnCompleted.builder()

@@ -20,7 +20,8 @@ import java.util.List;
 @Table(name = "chat", indexes = {
         @Index(name = "idx_chat_root_deleted", columnList = "root_chat_id, deleted_at"),
         @Index(name = "idx_chat_parent", columnList = "parent_id"),
-        @Index(name = "idx_chat_branch_point", columnList = "branch_point_turn_id")
+        @Index(name = "idx_chat_branch_point", columnList = "branch_point_turn_id"),
+        @Index(name = "idx_chat_member_last_activity", columnList = "member_id, last_activity_at")
 })
 public class Chat extends BaseEntity {
 
@@ -60,6 +61,11 @@ public class Chat extends BaseEntity {
     @Column(name = "last_turn_id")
     private Long lastTurnId;
 
+    @Column(name = "last_activity_at", nullable = false,
+            columnDefinition = "timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP")
+    @Builder.Default
+    private LocalDateTime lastActivityAt = LocalDateTime.now();
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "member_id", nullable = false)
     private Member member;
@@ -68,7 +74,6 @@ public class Chat extends BaseEntity {
     @Builder.Default
     private List<Turn> turns = new ArrayList<>();
 
-    // Phase 2: save 후 rootChatId를 자기 자신으로 세팅
     public void initRootChatId() {
         if (this.rootChatId == null) {
             this.rootChatId = this.id;
@@ -90,5 +95,9 @@ public class Chat extends BaseEntity {
     public void updateTitle(String title) {
         this.title = title;
         this.titleStatus = TitleStatus.USER_EDITED;
+    }
+
+    public void touchLastActivityAt() {
+        this.lastActivityAt = LocalDateTime.now();
     }
 }

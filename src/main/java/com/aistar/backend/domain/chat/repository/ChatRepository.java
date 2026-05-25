@@ -33,4 +33,35 @@ public interface ChatRepository extends JpaRepository<Chat, Long> {
 
     // root 기준 전체 분기 조회 (삭제 포함)
     List<Chat> findAllByRootChatId(Long rootChatId);
+
+    // ── Explorer: root 페이징 (recent 정렬) ──
+    @Query("SELECT c FROM Chat c WHERE c.member.id = :memberId AND c.parentId IS NULL " +
+            "AND (:includeDeleted = true OR c.deletedAt IS NULL) " +
+            "ORDER BY c.lastActivityAt DESC, c.id DESC")
+    Page<Chat> findRootsByRecent(@Param("memberId") Long memberId,
+                                 @Param("includeDeleted") boolean includeDeleted,
+                                 Pageable pageable);
+
+    // ── Explorer: root 페이징 (created 정렬) ──
+    @Query("SELECT c FROM Chat c WHERE c.member.id = :memberId AND c.parentId IS NULL " +
+            "AND (:includeDeleted = true OR c.deletedAt IS NULL) " +
+            "ORDER BY c.createdAt DESC, c.id DESC")
+    Page<Chat> findRootsByCreated(@Param("memberId") Long memberId,
+                                  @Param("includeDeleted") boolean includeDeleted,
+                                  Pageable pageable);
+
+    // ── Explorer: root 페이징 (name 정렬, title NULL은 마지막) ──
+    @Query("SELECT c FROM Chat c WHERE c.member.id = :memberId AND c.parentId IS NULL " +
+            "AND (:includeDeleted = true OR c.deletedAt IS NULL) " +
+            "ORDER BY CASE WHEN c.title IS NULL THEN 1 ELSE 0 END ASC, " +
+            "LOWER(c.title) ASC, c.id DESC")
+    Page<Chat> findRootsByName(@Param("memberId") Long memberId,
+                               @Param("includeDeleted") boolean includeDeleted,
+                               Pageable pageable);
+
+    // ── Explorer: root 목록의 전체 하위 chat 배치 조회 ──
+    @Query("SELECT c FROM Chat c WHERE c.rootChatId IN :rootChatIds " +
+            "AND (:includeDeleted = true OR c.deletedAt IS NULL)")
+    List<Chat> findAllByRootChatIdIn(@Param("rootChatIds") List<Long> rootChatIds,
+                                     @Param("includeDeleted") boolean includeDeleted);
 }

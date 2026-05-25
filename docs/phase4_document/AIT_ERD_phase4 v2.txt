@@ -6,7 +6,7 @@
 -- 주요 변경 (Phase 3 → Phase 4):
 --   [chat]          + last_activity_at
 --                   * last_turn_id DEFAULT 0 제거 (NULL 허용 유지)
---                   * root_chat_id NULL → NOT NULL (root 자신은 자기 chat_id를 저장)
+--                   * root_chat_id NULL 유지 (앱 레벨에서 non-null 보장, IDENTITY PK 제약)
 --   [usage_record]  + compressed_turn_count
 --   [인덱스]        + idx_chat_member_last_activity, idx_usage_member_period
 --
@@ -46,7 +46,7 @@ CREATE TABLE `message` (
 
 CREATE TABLE `chat` (
 	`chat_id`	bigint	NOT NULL,
-	`root_chat_id`	bigint	NOT NULL	COMMENT 'root chat은 자기 chat_id 저장, branch는 root의 chat_id 저장. 저장 직후 self-id로 업데이트.',
+	`root_chat_id`	bigint	NULL	COMMENT 'root chat은 자기 chat_id 저장(save 직후 initRootChatId), branch는 root의 chat_id 저장. IDENTITY PK 제약으로 DDL은 NULL, 앱 레벨 non-null 보장.',
 	`title`	text	NULL,
 	`title_status`	enum('PENDING', 'GENERATED', 'USER_EDITED')	NOT NULL	DEFAULT 'PENDING',
 	`created_at`	timestamp	NOT NULL	DEFAULT now(),
