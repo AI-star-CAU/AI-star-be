@@ -7,7 +7,7 @@ Phase 3에서 구현한 분기 트리 구조와 그래프 시각화 위에, **�
 **명세서**: `api_phase4_v6.md` (v0.7)
 **ERD**: `AIT_ERD_phase4 v2.txt`
 
-**진행 상태**: M1~M3 완료, M4~M7 미착수 (2026-05-26 기준)
+**진행 상태**: M1~M7 전체 완료 (2026-05-26)
 
 ---
 
@@ -40,15 +40,15 @@ Phase 3에서 구현한 분기 트리 구조와 그래프 시각화 위에, **�
 |--------|----------|------|--------|------|
 | GET | `/chats/explorer` | 탐색기 트리 조회 | §2.1 | 완료 |
 | GET | `/chats/explorer/{rootChatId}` | 단일 트리 새로고침 | §2.2 | 완료 |
-| GET | `/usage/me` | 토큰 사용량 조회 | §3.3 | 미구현 |
+| GET | `/usage/me` | 토큰 사용량 조회 | §3.3 | 완료 |
 
 ### 2.3 Phase 4에서 변경되는 기존 API 동작
 
 | Endpoint | 변경 내용 | 상태 |
 |----------|----------|------|
-| `POST /chats/{chatId}/messages` | LLM 호출 시 ancestor chain 맥락 조립, `turn_completed`에 압축 필드 추가 | 미구현 |
-| `POST /chats/{chatId}/messages/{messageId}/regenerate` | 동일 맥락 조립 적용 | 미구현 |
-| `PATCH /chats/{chatId}/messages/{messageId}` | 동일 맥락 조립 적용 | 미구현 |
+| `POST /chats/{chatId}/messages` | LLM 호출 시 ancestor chain 맥락 조립 + 압축, `turn_completed`에 압축 필드 추가, 사용량 누적 | 완료 |
+| `POST /chats/{chatId}/messages/{messageId}/regenerate` | 동일 맥락 조립 + 압축 + 사용량 누적 적용 | 완료 |
+| `PATCH /chats/{chatId}/messages/{messageId}` | 동일 맥락 조립 + 압축 + 사용량 누적 적용 | 완료 |
 | `POST /chats/{chatId}/branches` | branch 생성 시 부모 ancestor chain `lastActivityAt` 갱신 | 완료 |
 | `PATCH /chats/{chatId}` | 제목 수정 시 ancestor chain `lastActivityAt` 갱신 | 완료 |
 
@@ -247,6 +247,189 @@ private final LlmProvider provider;
 private final int contextWindow;
 ```
 
+### 3.5 맥락 조립 (FG-5, FR-5.1 — Context Assembly)
+
+LLM 호출 시, target chat에서 root chat까지의 ancestor chain을 따라가며 분기 경로에 해당하는 turn만 선별하여 messages 배열을 조립한다. **별도의 외부 API 없이** 메시지 송신/재생성/수정 시 내부에서 자동 적용된다.
+
+**조립 절차:**
+
+```
+사용자가 chat 87(parent=42)에서 메시지 전송 시:
+
+1. ancestor chain 구축: [42(root), 87(target)]
+2. chat 42: 다음 자식 87의 branchPointTurnId = turn 3
+   → turn_sequence ≤ 3인 turn만 포함 (turn 1, 2, 3)
+3. chat 87 (target): 현재 turn 이전까지의 모든 turn 포함
+4. 새 user 메시지를 끝에 추가
+
+결과: root.turn1, root.turn2, root.turn3, 87.turn1, 87.turn2, 새 메시지
+(root의 turn4, turn5는 분기 이후 자매 흐름이므로 제외)
+```
+
+```java
+// ContextAssembler.java — ancestor chain 순회
+private List<Chat> buildAncestorChain(Chat targetChat) {
+    List<Chat> chain = new ArrayList<>();
+    chain.add(targetChat);
+    Long parentId = targetChat.getParentId();
+    while (parentId != null) {
+        Chat parent = chatRepository.findById(parentId).orElse(null);
+        if (parent == null) break;
+        chain.add(parent);
+        parentId = parent.getParentId();
+    }
+    Collections.reverse(chain);  // root → target 순으로 정렬
+    return chain;
+}
+
+// 각 ancestor에서 branchPointTurnId 기준으로 turn 범위 결정
+for (int i = 0; i < chain.size(); i++) {
+    Chat chat = chain.get(i);
+    if (i < chain.size() - 1) {
+        Chat nextChild = chain.get(i + 1);
+        Turn bpTurn = turnRepository.findById(nextChild.getBranchPointTurnId()).orElseThrow();
+        turns = turnRepository.findByChatIdAndTurnSequenceLteWithMessages(
+                chat.getId(), bpTurn.getTurnSequence());
+    } else {
+        // target: 현재 turn 이전까지
+        turns = turnRepository.findByChatIdAndTurnSequenceLteWithMessages(
+                chat.getId(), currentTurn.getTurnSequence() - 1);
+    }
+}
+```
+
+**MessageService 연결:** `streamMessage()` 내에서 SSE 스트리밍 시작 전에 `contextAssembler.buildContext()`를 호출하여 조립된 messages 배열을 AI 서버에 전달한다.
+
+```java
+// MessageService.java — 맥락 조립 결과를 AI 서버에 전달
+ctxHolder[0] = contextAssembler.buildContext(
+        ctx.chat(), ctx.turn(), ctx.userMessage().getContent(),
+        ctx.chat().getLlmModel());
+
+aiServerClient.streamChatCompletion(
+        new AiChatRequest(content, 512, 0.7, null, ctxHolder[0].messages()),
+        chunk -> { ... }
+);
+```
+
+### 3.6 긴 대화 압축 (FR-5.2 — Compression)
+
+맥락 조립 후 총 토큰이 `모델의 contextWindow × 0.8`을 초과하면, 오래된 turn부터 차례로 압축한다.
+
+**압축 전략:**
+- summary가 `GENERATED` 상태인 turn → `"이전 대화 요약: <summary>"` 1건으로 치환
+- summary가 `PENDING`인 turn → content를 200자로 truncation + `"...[일부 생략]"`
+- **마지막 2턴은 절대 압축하지 않음** (현재 맥락 보호)
+
+```
+모델별 압축 임계값:
+┌──────────────────┬───────────────┬──────────────────┐
+│ 모델             │ contextWindow │ 임계(×0.8)       │
+├──────────────────┼───────────────┼──────────────────┤
+│ gpt-4o-mini      │ 128,000       │ 102,400          │
+│ gemini-2.0-flash │ 1,048,576     │ 838,860          │
+│ claude-3.5-sonnet│ 200,000       │ 160,000          │
+└──────────────────┴───────────────┴──────────────────┘
+```
+
+```java
+// ContextAssembler.java — 압축 루프
+int threshold = (int) (model.getContextWindow() * COMPRESSION_RATIO);  // 0.8
+int compressibleCount = Math.max(0, orderedTurns.size() - PROTECTED_TURN_COUNT);  // 마지막 2턴 보호
+
+for (int i = 0; i < compressibleCount && totalTokens > threshold; i++) {
+    Turn turn = orderedTurns.get(i);
+    if (turn.getSummary() != null) {
+        // summary 치환
+        replacement = List.of(Map.of("role", "user",
+                "content", "이전 대화 요약: " + turn.getSummary()));
+    } else {
+        // truncation fallback
+        replacement = truncateMessages(original);  // 200자 절단
+    }
+    totalTokens -= (oldTokens - newTokens);
+    compressionApplied = true;
+    compressedTurnCount++;
+}
+```
+
+**결과 통보:** `turn_completed` SSE 이벤트에 압축 결과 필드를 포함한다.
+
+```java
+// MessageResDto.java — Phase 4 확장 필드
+public record TurnCompleted(
+        Long turnId, Long aiMessageId, Integer answerToken, String summaryStatus,
+        Integer contextTokens,           // 압축 후 LLM에 전달된 입력 토큰 수
+        Boolean compressionApplied,      // 압축 적용 여부
+        Integer compressedTurnCount      // 압축된 turn 수
+) {}
+```
+
+`message.prompt_token`에도 `contextTokens` 값을 저장하여, 이후 사용량 누적에 활용한다.
+
+### 3.7 토큰 사용량 추적 (FR-5.3 — Usage Tracking)
+
+```http
+GET /api/v1/usage/me
+```
+
+현재 사용자의 활성 기간 토큰 사용량을 조회한다.
+
+**응답 구조:**
+
+```
+UsageInfo
+├── usageRecordId, planId, planName
+├── periodStart, periodEnd
+├── tokensUsed, tokenLimit, requestCount
+├── remainingTokens        ← tokenLimit - tokensUsed (무제한이면 null)
+├── usageRatio             ← tokensUsed / tokenLimit (무제한이면 null)
+└── warningLevel           ← NONE / WARN(≥0.8) / CRITICAL(≥0.95)
+```
+
+**활성 record 자동 생성:** 조회 시점에 활성 record가 없으면, 가장 최근 record의 plan을 기준으로 새 기간을 자동 생성한다.
+
+```java
+// UsageService.java — 활성 record 조회 또는 자동 생성
+public UsageResDto.UsageInfo getMyUsage(Long memberId) {
+    LocalDateTime now = LocalDateTime.now();
+    return usageRecordRepository.findActiveByMemberId(memberId, now)
+            .map(UsageConverter::toUsageInfo)
+            .orElseGet(() -> createNewPeriod(memberId, now));
+}
+```
+
+**사용량 누적:** LLM 호출 완료 시 `MessageService`의 완료 트랜잭션에서 호출된다.
+
+```java
+// MessageService.java — 성공/취소/에러 세 경로 모두에서 누적
+// 성공 시
+usageService.accumulateUsage(memberId,
+        ctxHolder[0].contextTokens(), answerToken,
+        ctxHolder[0].compressedTurnCount());
+
+// 취소/에러 시 (ctxHolder[0]이 null이 아닌 경우에만)
+usageService.accumulateUsage(memberId,
+        ctxHolder[0].contextTokens(), partialToken,
+        ctxHolder[0].compressedTurnCount());
+```
+
+**WarningLevel:** `usageRatio` 기반으로 프론트엔드에 경고 수준을 전달한다.
+
+```java
+// WarningLevel.java
+public enum WarningLevel {
+    NONE, WARN, CRITICAL;
+
+    public static WarningLevel from(Double usageRatio) {
+        if (usageRatio == null) return NONE;
+        if (usageRatio >= 0.95) return CRITICAL;
+        if (usageRatio >= 0.8) return WARN;
+        return NONE;
+    }
+}
+```
+
 ---
 
 ## 4. ERD 변경분 (Phase 3 → Phase 4)
@@ -276,9 +459,10 @@ com.aistar.backend
 ├── domain
 │   ├── chat
 │   │   ├── controller/
-│   │   │   └── ExplorerController.java    ─ 탐색기 트리 조회
+│   │   │   └── ExplorerController.java    ─ 탐색기 트리 조회, 단일 트리 새로고침
 │   │   ├── service/
-│   │   │   └── ExplorerService.java       ─ 탐색기 페이징, 배치 조회
+│   │   │   ├── ExplorerService.java       ─ 탐색기 페이징, 배치 조회
+│   │   │   └── ContextAssembler.java      ─ ancestor chain 맥락 조립 + 압축
 │   │   ├── converter/
 │   │   │   └── ExplorerConverter.java     ─ DFS 정렬, depth 계산
 │   │   ├── dto/
@@ -289,9 +473,19 @@ com.aistar.backend
 │       ├── entity/
 │       │   ├── Plan.java                  ─ 요금제
 │       │   └── UsageRecord.java           ─ 기간별 토큰 사용량
-│       └── repository/
-│           ├── PlanRepository.java
-│           └── UsageRecordRepository.java
+│       ├── repository/
+│       │   ├── PlanRepository.java
+│       │   └── UsageRecordRepository.java
+│       ├── enums/
+│       │   └── WarningLevel.java          ─ NONE, WARN, CRITICAL
+│       ├── dto/
+│       │   └── UsageResDto.java           ─ UsageInfo 응답
+│       ├── converter/
+│       │   └── UsageConverter.java        ─ UsageRecord → UsageInfo 변환
+│       ├── service/
+│       │   └── UsageService.java          ─ 사용량 조회, 누적
+│       └── controller/
+│           └── UsageController.java       ─ GET /usage/me
 ```
 
 ---
@@ -314,14 +508,57 @@ com.aistar.backend
 
 **해결**: nullable 유지. `initRootChatId()`로 save 직후 자기 chatId를 저장. 앱 레벨에서 null인 row가 존재하지 않도록 보장. 명세서(§1.2)와 ERD에 이 결정을 반영.
 
+### 6.3 contextResult 스코프 문제 (Virtual Thread + try/catch)
+
+**증상**: `MessageService.streamMessage()` 내 Virtual Thread에서 `var contextResult = contextAssembler.buildContext(...)`를 try 블록에 선언하면, catch 블록에서 접근 불가.
+
+**원인**: Java의 블록 스코프 규칙. try 내 지역 변수는 catch/finally에서 보이지 않는다. catch 블록에서도 `contextResult`의 압축 정보를 사용하여 사용량을 누적해야 한다.
+
+**해결**: effectively final 배열 홀더 패턴 사용. `final ContextAssembler.ContextResult[] ctxHolder = {null}`을 try 밖에 선언하고, try 내에서 `ctxHolder[0] = ...`으로 할당. catch에서 `ctxHolder[0] != null` 체크 후 사용.
+
+### 6.4 취소/에러 경로에서 detached entity 접근
+
+**증상**: cancel/error catch 블록에서 `ctx.chat().getMember().getId()` 호출 시, 원래 트랜잭션이 끝난 후라 lazy loading이 될 수 있는 우려.
+
+**원인**: `createTurnAndMessages()`가 `findByIdWithMemberAndDeletedAtIsNull()`로 member를 fetch join하여 영속 컨텍스트에 로딩해두므로, 프록시가 아닌 실제 객체가 TurnContext에 전달됨.
+
+**해결**: 실제로 문제 없음. fetch join으로 이미 로딩된 상태이므로 detached 상태에서도 getter 호출 가능. 단, TransactionTemplate 콜백 내에서 사용하므로 안전.
+
 ---
 
-## 7. 미구현 사항 (M4~M7)
+## 7. 파일 변경 총정리
 
-| 항목 | 설명 | 명세서 |
-|------|------|--------|
-| 맥락 조립 (Context Assembly) | LLM 호출 시 ancestor chain 기반 messages 배열 조립 | §3.1 |
-| 압축 (Compression) | contextWindow × 0.8 초과 시 오래된 turn summary/truncation | §3.2 |
-| turn_completed 확장 | `contextTokens`, `compressionApplied`, `compressedTurnCount` 필드 추가 | §3.2 |
-| 토큰 사용량 조회 | `GET /usage/me` — 활성 기간 사용량, warningLevel | §3.3 |
-| 사용량 누적 | LLM 완료 후 `usage_record.tokens_used` 갱신 | §3.3 |
+### 신규 파일 (15개)
+
+| 파일 (`src/main/java/com/aistar/backend/` 기준) | 역할 |
+|---|---|
+| `domain/chat/controller/ExplorerController.java` | 탐색기 API 엔드포인트 |
+| `domain/chat/service/ExplorerService.java` | 탐색기 페이징, 배치 조회 |
+| `domain/chat/service/ContextAssembler.java` | ancestor chain 맥락 조립 + 압축 |
+| `domain/chat/converter/ExplorerConverter.java` | DFS 정렬, depth 계산 |
+| `domain/chat/dto/ExplorerResDto.java` | ExplorerPage, TreeDto, NodeDto |
+| `domain/chat/enums/ExplorerSort.java` | RECENT, CREATED, NAME |
+| `domain/usage/entity/Plan.java` | 요금제 엔티티 |
+| `domain/usage/entity/UsageRecord.java` | 기간별 토큰 사용량 |
+| `domain/usage/repository/PlanRepository.java` | Plan CRUD |
+| `domain/usage/repository/UsageRecordRepository.java` | 활성 record 조회, 최근 record 조회 |
+| `domain/usage/enums/WarningLevel.java` | NONE / WARN / CRITICAL |
+| `domain/usage/dto/UsageResDto.java` | UsageInfo 응답 DTO |
+| `domain/usage/converter/UsageConverter.java` | UsageRecord → UsageInfo 변환 |
+| `domain/usage/service/UsageService.java` | 사용량 조회, 누적 |
+| `domain/usage/controller/UsageController.java` | GET /usage/me |
+
+### 수정 파일 (10개)
+
+| 파일 | 변경 내용 |
+|---|---|
+| `domain/chat/entity/Chat.java` | `lastActivityAt` 필드 + 인덱스 + `touchLastActivityAt()` |
+| `domain/chat/entity/Message.java` | `updatePromptToken()` 메서드 추가 |
+| `domain/chat/enums/LlmModel.java` | `contextWindow` 필드 추가 |
+| `domain/chat/repository/ChatRepository.java` | Explorer 페이징 쿼리 4개 추가 |
+| `domain/chat/repository/TurnRepository.java` | 맥락 조립용 `findByChatIdAndTurnSequenceLteWithMessages` 추가 |
+| `domain/chat/dto/MessageResDto.java` | TurnCompleted에 `contextTokens`, `compressionApplied`, `compressedTurnCount` 추가 |
+| `domain/chat/service/ChatService.java` | `touchAncestorChain()` + createBranch/updateChatTitle 연결 |
+| `domain/chat/service/MessageService.java` | ContextAssembler 연동, 압축 결과 turn_completed, 사용량 누적 |
+| `global/apiPayload/code/ErrorStatus.java` | `EXPLORER_4001`, `CONTEXT_4001`, `USAGE_4041` 추가 |
+| `global/config/DataInitializer.java` | Plan + UsageRecord 시드 데이터 추가 |
