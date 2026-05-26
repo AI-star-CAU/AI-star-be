@@ -40,6 +40,7 @@ public class MessageService {
     private final AiServerClient aiServerClient;
     private final ObjectMapper objectMapper;
     private final TransactionTemplate transactionTemplate;
+    private final com.aistar.backend.domain.usage.service.UsageService usageService;
 
     private static final long SSE_TIMEOUT = 60_000L * 5;
 
@@ -103,6 +104,7 @@ public class MessageService {
         streamingContexts.put(aiMessageId, streamCtx);
 
         Thread.startVirtualThread(() -> {
+            final ContextAssembler.ContextResult[] ctxHolder = {null};
             try {
                 // 0. branch_created (재생성/수정 시)
                 if (ctx.branchCreated() != null) {
@@ -118,7 +120,7 @@ public class MessageService {
                         .build());
 
                 // 2. 맥락 조립 + 압축 (§3.1, §3.2)
-                var contextResult = contextAssembler.buildContext(
+                ctxHolder[0] = contextAssembler.buildContext(
                         ctx.chat(), ctx.turn(), ctx.userMessage().getContent(),
                         ctx.chat().getLlmModel());
 
@@ -129,7 +131,7 @@ public class MessageService {
                                 512,
                                 0.7,
                                 null,
-                                contextResult.messages()
+                                ctxHolder[0].messages()
                         ),
                         chunk -> {
                             if (streamCtx.canceled().get()) {
@@ -145,9 +147,10 @@ public class MessageService {
                         }
                 );
 
-                // 3. 완료 처리
+                // 4. 완료 처리
                 String fullContent = streamCtx.contentBuffer().toString();
                 int answerToken = fullContent.split("\\s+").length;
+                Long memberId = ctx.chat().getMember().getId();
 
                 transactionTemplate.executeWithoutResult(status -> {
                     Message message = messageRepository.findById(aiMessageId).orElseThrow();
@@ -155,12 +158,15 @@ public class MessageService {
                         message.updateContent(fullContent);
                         message.updateStatus(MessageStatus.COMPLETED);
                         message.updateAnswerToken(answerToken);
-                        message.updatePromptToken(contextResult.contextTokens());
+                        message.updatePromptToken(ctxHolder[0].contextTokens());
                     }
                     Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
                     chat.updateLastTurnId(ctx.turn().getId());
                     chat.touchUpdatedAt();
                     chatService.touchAncestorChain(ctx.chat().getId());
+                    usageService.accumulateUsage(memberId,
+                            ctxHolder[0].contextTokens(), answerToken,
+                            ctxHolder[0].compressedTurnCount());
                 });
 
                 sendEvent(emitter, "turn_completed", MessageResDto.TurnCompleted.builder()
@@ -168,9 +174,9 @@ public class MessageService {
                         .aiMessageId(aiMessageId)
                         .answerToken(answerToken)
                         .summaryStatus("PENDING")
-                        .contextTokens(contextResult.contextTokens())
-                        .compressionApplied(contextResult.compressionApplied())
-                        .compressedTurnCount(contextResult.compressedTurnCount())
+                        .contextTokens(ctxHolder[0].contextTokens())
+                        .compressionApplied(ctxHolder[0].compressionApplied())
+                        .compressedTurnCount(ctxHolder[0].compressedTurnCount())
                         .build());
 
                 sendDoneAndComplete(emitter);
@@ -185,6 +191,12 @@ public class MessageService {
                 transactionTemplate.executeWithoutResult(status -> {
                     Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
                     chat.touchUpdatedAt();
+                    if (ctxHolder[0] != null) {
+                        usageService.accumulateUsage(ctx.chat().getMember().getId(),
+                                ctxHolder[0].contextTokens(),
+                                partialToken != null ? partialToken : 0,
+                                ctxHolder[0].compressedTurnCount());
+                    }
                 });
 
                 try {
@@ -206,6 +218,11 @@ public class MessageService {
                         message.updateStatus(MessageStatus.FAILED);
                         Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
                         chat.touchUpdatedAt();
+                        if (ctxHolder[0] != null) {
+                            usageService.accumulateUsage(ctx.chat().getMember().getId(),
+                                    ctxHolder[0].contextTokens(), 0,
+                                    ctxHolder[0].compressedTurnCount());
+                        }
                     });
                     sendEvent(emitter, "error", MessageResDto.SseError.builder()
                             .code(ErrorStatus.LLM_CALL_FAILED.getCode())
