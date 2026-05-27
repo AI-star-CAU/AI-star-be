@@ -251,6 +251,31 @@ private final int contextWindow;
 
 LLM 호출 시, target chat에서 root chat까지의 ancestor chain을 따라가며 분기 경로에 해당하는 turn만 선별하여 messages 배열을 조립한다. **별도의 외부 API 없이** 메시지 송신/재생성/수정 시 내부에서 자동 적용된다.
 
+
+맥락 조립
+
+분기 트리에서 root부터 현재 chat까지의 대화만 골라서 시간순으로 이어 붙인다.
+
+root (turn 1,2,3) → 분기A (turn 1,2) → 분기B (turn 1) ← 현재 위치
+
+- root: 분기A가 갈라진 branchPointTurn 시점까지만 (예: turn 1,2)
+- 분기A: 분기B가 갈라진 시점까지만 (예: turn 1)
+- 분기B: 현재 turn 이전까지
+- 각 turn의 user/assistant 메시지를 [{role, content}, ...] 배열로 만듦
+
+→ 관련 없는 가지의 turn은 전송 X
+
+압축
+
+전체 토큰이 모델 context window × 80% 를 넘으면 발동합니다.
+
+- 오래된 turn부터 하나씩 처리
+- summary 있으면 → "이전 대화 요약: {summary}" 한 줄로 교체
+- summary 없으면 → 메시지를 200자로 잘라서 "...[일부 생략]" 붙임
+- 마지막 2턴은 절대 건드리지 않음 (최근 맥락 보존)
+- 임계치 아래로 떨어지면 중단
+
+토큰 추정은 글자수 / 4 로 단순 계산합니다 (MVP 간소화).
 **조립 절차:**
 
 ```
