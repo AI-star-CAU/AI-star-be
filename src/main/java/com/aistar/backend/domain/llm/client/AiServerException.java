@@ -1,4 +1,4 @@
-package com.aistar.backend.ai;
+package com.aistar.backend.domain.llm.client;
 
 import java.util.Set;
 

@@ -1,6 +1,6 @@
 package com.aistar.backend.global.config;
 
-import com.aistar.backend.ai.AiServerClient;
+import com.aistar.backend.domain.llm.client.AiServerClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;

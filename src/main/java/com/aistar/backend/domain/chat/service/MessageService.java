@@ -1,8 +1,8 @@
 package com.aistar.backend.domain.chat.service;
 
-import com.aistar.backend.ai.AiServerClient;
-import com.aistar.backend.ai.AiServerException;
-import com.aistar.backend.ai.dto.AiChatRequest;
+import com.aistar.backend.domain.llm.client.AiServerClient;
+import com.aistar.backend.domain.llm.client.AiServerException;
+import com.aistar.backend.domain.llm.dto.AiChatRequest;
 import com.aistar.backend.domain.chat.dto.MessageResDto;
 import com.aistar.backend.domain.chat.entity.Chat;
 import com.aistar.backend.domain.chat.entity.Message;

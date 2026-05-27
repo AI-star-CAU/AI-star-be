@@ -1,12 +1,12 @@
-package com.aistar.backend.ai;
+package com.aistar.backend.domain.llm.client;
 
-import com.aistar.backend.ai.dto.AiBranchTitleRequest;
-import com.aistar.backend.ai.dto.AiBranchTitleResponse;
-import com.aistar.backend.ai.dto.AiChatRequest;
-import com.aistar.backend.ai.dto.AiChatStreamChunk;
-import com.aistar.backend.ai.dto.AiCompletionResponse;
-import com.aistar.backend.ai.dto.AiSummaryRequest;
-import com.aistar.backend.ai.dto.AiSummaryResponse;
+import com.aistar.backend.domain.llm.dto.AiBranchTitleRequest;
+import com.aistar.backend.domain.llm.dto.AiBranchTitleResponse;
+import com.aistar.backend.domain.llm.dto.AiChatRequest;
+import com.aistar.backend.domain.llm.dto.AiChatStreamChunk;
+import com.aistar.backend.domain.llm.dto.AiCompletionResponse;
+import com.aistar.backend.domain.llm.dto.AiSummaryRequest;
+import com.aistar.backend.domain.llm.dto.AiSummaryResponse;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;

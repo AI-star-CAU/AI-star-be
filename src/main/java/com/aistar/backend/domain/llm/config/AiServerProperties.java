@@ -1,4 +1,4 @@
-package com.aistar.backend.ai;
+package com.aistar.backend.domain.llm.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 

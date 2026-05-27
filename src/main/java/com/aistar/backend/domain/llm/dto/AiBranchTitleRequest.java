@@ -1,4 +1,4 @@
-package com.aistar.backend.ai.dto;
+package com.aistar.backend.domain.llm.dto;
 
 public record AiBranchTitleRequest(
         Long chatId,
