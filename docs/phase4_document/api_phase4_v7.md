@@ -1,8 +1,8 @@
 # Phase 4 API 명세서
 
 **문서 식별자:** API-AIT-P4  
-**버전:** 0.6  
-**작성일:** 2026-05-25  
+**버전:** 0.8  
+**작성일:** 2026-05-26  
 **대상 Phase:** Phase 4 (W14) — 대화 기록 파일 시스템 + 맥락 관리  
 **범위:** FG-4 대화 기록 파일 시스템 (FR-4.2, FR-4.3), FG-5 맥락 관리 (FR-5.1, FR-5.2, FR-5.3)  
 **기준 ERD:** `ait_erd_phase4` (Phase 3 ERD에 Phase 4 변경분 적용)  
@@ -30,7 +30,6 @@ Phase 2 명세서(`API-AIT-P2`) §0 및 Phase 3 명세서(`API-AIT-P3`) §0 공�
 | HTTP | code | message |
 |---|---|---|
 | 400 | `EXPLORER_4001` | 유효하지 않은 탐색기 조회 파라미터입니다. |
-| 400 | `CONTEXT_4001` | 유효하지 않은 맥락 조회 파라미터입니다. |
 | 404 | `USAGE_4041` | 사용량 기록을 찾을 수 없습니다. |
 
 기존 `CHAT_4041`, `TURN_4041`, `AUTH_4011`, `COMMON_403` 등은 Phase 2·3과 동일하게 사용한다. 맥락 압축 중 LLM 호출이 실패하면 Phase 2·3의 `LLM_5001` 또는 `COMMON_500`으로 처리한다.
@@ -279,19 +278,16 @@ Authorization: Bearer <accessToken>
    - `name`: 제목 오름차순(대소문자 무시). `title`이 null인 항목은 마지막에 배치한다. MySQL/JPA 구현 예: `ORDER BY (title IS NULL) ASC, LOWER(title) ASC, chat_id DESC` (MySQL은 표준 SQL의 `NULLS LAST` 키워드를 지원하지 않으므로 `IS NULL` 표현식으로 대체).
 4. 페이징된 root들의 `rootChatId` 목록을 먼저 구한 뒤, **`root_chat_id IN (:pagedRootIds)` 조건으로 해당 root들에 속한 모든 chat을 한 번의 쿼리로 일괄 조회**한다 (`idx_chat_root_deleted` 활용). root별 개별 쿼리를 반복하지 않는다.
 5. 메모리에서 DFS로 정렬: 같은 부모를 가진 형제는 `created_at ASC`
-6. `turnCount` 조회 방식 — **root별로 개별 count 쿼리를 날리지 않는다.** 페이징된 root들의 `rootChatId` 목록을 먼저 구한 뒤, 해당 root들에 속한 모든 chat을 대상으로 다음 한 번의 쿼리로 일괄 계산한다:
+6. `turnCount` 조회 방식 — **root별로 개별 count 쿼리를 날리지 않는다.** 처리 규칙 4에서 일괄 조회한 chat의 ID 목록을 사용하여 다음 한 번의 쿼리로 일괄 계산한다:
    ```sql
    SELECT chat_id, COUNT(*) AS turn_count
    FROM turn
-   WHERE chat_id IN (
-     SELECT chat_id FROM chat
-     WHERE root_chat_id IN (:pagedRootIds)
-       AND (deleted_at IS NULL OR :includeDeleted = true)
-   )
+   WHERE chat_id IN (:allChatIds)
    GROUP BY chat_id;
    ```
-   `idx_turn_chat_sequence` 활용. 결과를 메모리 Map으로 변환 후 노드에 매핑.
+   `idx_turn_chat_sequence` 활용. 결과를 메모리 Map으로 변환 후 노드에 매핑. Phase 3에서 구현한 `TurnRepository.countByChatIds(chatIds)`를 재사용한다.
 7. `lastActivityAt`은 ERD §1의 `chat.last_activity_at` 캐시 값을 그대로 사용
+8. 소유 chat이 0개인 사용자: `roots: []`, `totalRootCount: 0`, `hasNext: false`를 반환한다. 에러가 아닌 정상 200 응답이다.
 
 **FR-4.3 (탐색기를 통한 이동)**
 
@@ -431,6 +427,8 @@ branch chat 87 (parent_id=42, branchPointTurnId=turn 3)
 | `claude-3.5-sonnet` | 200,000 | 160,000 |
 
 > 본 임계값은 운영 가능한 기본값이며, 별도의 런타임 설정(`application.yml`)으로 모델별로 조정 가능하도록 둔다. API 응답에는 노출되지 않는다.
+>
+> **[MVP 간소화]** Phase 4 구현에서는 `COMPRESSION_RATIO = 0.8`을 상수로 하드코딩하였다. `application.yml` 외부화는 운영 데이터 수집 후 조정이 필요한 시점에 진행한다.
 
 **압축 절차:**
 
@@ -446,7 +444,7 @@ branch chat 87 (parent_id=42, branchPointTurnId=turn 3)
 
 **결과 통보:**
 
-압축이 적용된 LLM 호출에서는 SSE `turn_completed` 이벤트에 다음 필드를 포함한다:
+SSE `turn_completed` 이벤트에 다음 세 필드를 **압축 여부와 무관하게 항상** 포함한다. 압축이 적용되지 않은 경우 `compressionApplied: false`, `compressedTurnCount: 0`이며, `contextTokens`는 실제 LLM 입력 토큰 수를 채운다:
 
 | 필드 | 타입 | 설명 |
 |---|---|---|
@@ -492,7 +490,7 @@ Authorization: Bearer <accessToken>
 | `tokenLimit` | Long | 기간 내 한도. `0`이면 무제한 |
 | `requestCount` | Integer | 누적 요청 수 |
 | `remainingTokens` | Long \| null | `tokenLimit - tokensUsed`. `tokenLimit=0`이면 null |
-| `usageRatio` | Number \| null | `tokensUsed / tokenLimit`. 0~1. `tokenLimit=0`이면 null |
+| `usageRatio` | Double \| null | `tokensUsed / tokenLimit`. 0~1. `tokenLimit=0`이면 null |
 | `warningLevel` | Enum&lt;"NONE" \| "WARN" \| "CRITICAL"&gt; | `usageRatio` 기반. 0.8 이상이면 WARN, 0.95 이상이면 CRITICAL. `tokenLimit=0`이면 NONE |
 
 ```json
@@ -570,9 +568,9 @@ Phase 3 §4.1의 SSE 이벤트에 다음을 추가·변경한다. Phase 2의 일
 | `aiMessageId` | Long | (기존) |
 | `answerToken` | Integer | (기존) |
 | `summaryStatus` | Enum&lt;"PENDING"&gt; | (Phase 3에서 추가) |
-| `contextTokens` | Integer | **Phase 4 신규.** §3.2 참조 |
-| `compressionApplied` | Boolean | **Phase 4 신규.** §3.2 참조 |
-| `compressedTurnCount` | Integer | **Phase 4 신규.** §3.2 참조 |
+| `contextTokens` | Integer | **Phase 4 신규. 항상 전송.** §3.2 참조 |
+| `compressionApplied` | Boolean | **Phase 4 신규. 항상 전송.** §3.2 참조 |
+| `compressedTurnCount` | Integer | **Phase 4 신규. 항상 전송.** §3.2 참조 |
 
 ```
 event: turn_completed
@@ -783,6 +781,7 @@ GROUP BY chat_id;
 - ancestor chain 조회: chain 길이만큼의 chat row 단순 SELECT. 일반적으로 depth ≤ 5
 - turn 펼침: chat_id IN (chain) + turn_sequence ≤ 분기점 조건. `idx_turn_chat_sequence` 활용
 - 토큰 카운트: tokenizer 라이브러리(예: `tiktoken-java`) 활용. message 1건당 약 0.5ms
+  > **[MVP 간소화]** Phase 4 구현에서는 tokenizer 라이브러리 대신 `characters / 4` 간이 추정을 사용하였다. 정밀한 토큰 카운팅이 필요한 시점에 tiktoken 등으로 교체한다.
 - 압축 시 summary는 turn row에 이미 캐시되어 있으므로 추가 LLM 호출 없음
 
 목표: ancestor chain 길이 5, turn 100건 기준 맥락 조립 ≤ 200ms.
@@ -815,4 +814,5 @@ GROUP BY chat_id;
 | 0.4 | 2026-05-24 | 리뷰 3차 반영 — 문서/SQL 표현 일관성 정리. (1) §4 처리 시점 표의 "root당 1쿼리" 표현 정정 — v0.3에서 §2.1·§8.2를 IN 쿼리로 통일했으나 §4 표만 누락된 잔존 표현. "페이징된 root 묶음 1쿼리 (`root_chat_id IN (:pagedRootIds)`) + turn count `GROUP BY` 1쿼리"로 명시. (2) §8.2 SQL 예시의 `ORDER BY last_activity_at DESC NULLS LAST` 제거 — `last_activity_at`이 NOT NULL이므로 NULLS 처리 불필요하며 MySQL은 표준 `NULLS LAST` 키워드를 미지원. `ORDER BY last_activity_at DESC, chat_id DESC`로 변경. (3) §2.1 `name` 정렬 규칙을 MySQL/JPA 호환 표현으로 변경 — `title ASC NULLS LAST` 대신 자연어 설명("title이 null인 항목은 마지막에 배치")과 구현 예 `ORDER BY (title IS NULL) ASC, LOWER(title) ASC, chat_id DESC` 병기. |
 | 0.5 | 2026-05-25 | ERD 표기 정리. (1) 기준 ERD 표기를 내부 버전 `ait_erd_v2.2`에서 파일명 기반 `ait_erd_phase4`로 변경. Phase 2·3 명세서가 사용한 `ait_erd_v2`, `ait_erd_v2.1` 표기 대신 phase 명을 직접 쓰는 방식으로 통일하여 ERD 파일과 명세서 간 매칭을 명확화. (2) §1 제목을 "ERD v2.2 변경분"에서 "ERD 변경분 (Phase 3 → Phase 4)"으로 변경. 본문에 통합 스키마 파일 `AIT_ERD_phase4.txt` 참조 명시. **스키마 정의 자체는 변경 없음** — v0.4와 동일하게 `chat.last_activity_at`, `usage_record.compressed_turn_count` 추가 및 인덱스 2개 유지. |
 | 0.6 | 2026-05-25 | ERD 리뷰 반영 — Phase 3 ERD에 남아 있던 정책 모호성 정리. (1) `chat.last_turn_id`의 `DEFAULT 0` 제거. `turn_id = 0`은 존재하지 않는 의미 없는 기본값. `NULL`로 시작하고 첫 turn 저장 시 갱신한다. (2) `chat.root_chat_id`를 `NULL` → `NOT NULL`로 변경하고 **root chat도 자기 `chat_id`를 저장**하도록 정책 통일. 탐색기·그래프 쿼리가 `root_chat_id IN (:pagedRootIds)` 한 줄로 처리되도록 단순화. JPA 구현 시 생성 트랜잭션 내 self-update 흐름 명문화. (3) §1.3 FK 관리 방식 추가 — FK 제약은 ERD에 명시하지 않고 JPA 연관관계(`@ManyToOne`, `@JoinColumn`)로 관리한다는 점을 명문화. (4) ERD 파일의 SQL 표기 정리 — `String(20)` → `varchar(20)`, enum 컬럼들의 허용값을 `enum('VAL1', 'VAL2', ...)` 형식으로 명시. 스키마 정의 자체는 동일하며 표기만 SQL 친화적으로 변경. |
-| 0.7 | 2026-05-26 | 구현 리뷰 반영. `chat.root_chat_id`를 NOT NULL에서 **NULL 유지**로 변경. `@GeneratedValue(IDENTITY)` 특성상 INSERT 시점에 PK를 알 수 없어 NOT NULL 제약 시 임시값(0L) 우회가 필요하며, 이는 `initRootChatId()` 호출 누락 시 잘못된 쿼리 결과를 유발할 수 있다. 앱 레벨(`initRootChatId()`)에서 non-null을 보장하고 DDL은 nullable로 둔다. §1.2 및 ERD 파일 동시 수정. |
+| 0.7 | 2026-05-26 | 구현 리뷰 반영. (1) `chat.root_chat_id`를 NOT NULL에서 **NULL 유지**로 변경. `@GeneratedValue(IDENTITY)` 특성상 INSERT 시점에 PK를 알 수 없어 NOT NULL 제약 시 임시값(0L) 우회가 필요하며, 이는 `initRootChatId()` 호출 누락 시 잘못된 쿼리 결과를 유발할 수 있다. 앱 레벨(`initRootChatId()`)에서 non-null을 보장하고 DDL은 nullable로 둔다. §1.2 및 ERD 파일 동시 수정. (2) §2.1 처리 규칙 6번 `turnCount` 쿼리를 서브쿼리 방식에서 Phase 3의 `countByChatIds(chatIds)` 재사용 방식으로 변경. 배치 조회된 chatId 목록을 직접 전달하여 동일 결과를 더 단순하게 얻는다. (3) §3.2 압축 비율 `application.yml` 외부화를 MVP 간소화 사항으로 주석 추가. (4) §8.3 토큰 추정을 `characters / 4` 간이 방식으로 MVP 간소화 사항 주석 추가. |
+| 0.8 | 2026-05-26 | FE 팀 리뷰 반영 (P4F-1~4). (1) §3.2·§3.4 `turn_completed`의 `contextTokens`·`compressionApplied`·`compressedTurnCount`를 **압축 여부와 무관하게 항상 전송**으로 정정. §5.3 시나리오의 "매 턴 누적 캐시"와 일관성 확보. (2) §0.2에서 `CONTEXT_4001` 에러 코드 제거 — 맥락 조립은 서버 내부 동작이며 대응 엔드포인트가 없어 트리거 불가. `ErrorStatus.java`에서도 동시 제거. (3) §2.1 처리 규칙에 빈 사용자 응답 명시 — `roots: []`, `totalRootCount: 0`, `hasNext: false` (정상 200). (4) §3.3 `usageRatio` 타입을 `Number`에서 `Double`로 변경하여 타입 표기 컨벤션 통일. |

@@ -46,9 +46,6 @@ public enum ErrorStatus implements BaseErrorCode {
     // Explorer
     EXPLORER_INVALID_PARAM(HttpStatus.BAD_REQUEST, "EXPLORER_4001", "유효하지 않은 탐색기 조회 파라미터입니다."),
 
-    // Context
-    CONTEXT_INVALID_PARAM(HttpStatus.BAD_REQUEST, "CONTEXT_4001", "유효하지 않은 맥락 조회 파라미터입니다."),
-
     // Usage
     USAGE_NOT_FOUND(HttpStatus.NOT_FOUND, "USAGE_4041", "사용량 기록을 찾을 수 없습니다."),
 
