@@ -45,6 +45,7 @@ public enum ErrorStatus implements BaseErrorCode {
     GRAPH_INVALID_PARAM(HttpStatus.BAD_REQUEST, "GRAPH_4001", "유효하지 않은 그래프 조회 파라미터입니다."),
 
     // LLM
+    AI_SERVER_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "LLM_5031", "ai server가 점검중입니다."),
     LLM_CALL_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "LLM_5001", "LLM 서비스 호출에 실패했습니다."),
     ;
 

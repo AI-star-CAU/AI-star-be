@@ -17,8 +17,10 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.http.codec.ServerSentEvent;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 
 import java.time.Duration;
+import java.util.Set;
 import java.util.function.Consumer;
 
 @Component
@@ -29,6 +31,7 @@ public class AiServerWebClient implements AiServerClient {
     // prompt wrappers over the same completion endpoint for now.
     private static final String CHAT_STREAM_PATH = "/api/v1/ai/completions/stream";
     private static final String COMPLETIONS_PATH = "/api/v1/ai/completions";
+    private static final Set<Integer> AVAILABLE_STATUS_CODES = Set.of(200, 201, 202, 204, 405);
     private static final ParameterizedTypeReference<ServerSentEvent<String>> SSE_TYPE =
             new ParameterizedTypeReference<>() {
             };
@@ -48,9 +51,14 @@ public class AiServerWebClient implements AiServerClient {
                 .bodyValue(request)
                 .retrieve()
                 .onStatus(status -> !status.is2xxSuccessful(), response -> response.bodyToMono(String.class)
-                        .map(body -> new AiServerException("AI server stream request failed: " + body)))
+                        .defaultIfEmpty("")
+                        .map(body -> AiServerException.fromStatus(
+                                "AI server stream request failed",
+                                response.statusCode().value(),
+                                body)))
                 .bodyToFlux(SSE_TYPE)
-                .timeout(readTimeout);
+                .timeout(readTimeout)
+                .onErrorMap(this::toAiServerException);
 
         stream.takeUntil(this::isDoneEvent).toIterable().forEach(event -> {
             if ("error".equals(event.event())) {
@@ -79,10 +87,32 @@ public class AiServerWebClient implements AiServerClient {
                 .bodyValue(request)
                 .retrieve()
                 .onStatus(status -> !status.is2xxSuccessful(), response -> response.bodyToMono(String.class)
-                        .map(body -> new AiServerException("AI server completion request failed: " + body)))
+                        .defaultIfEmpty("")
+                        .map(body -> AiServerException.fromStatus(
+                                "AI server completion request failed",
+                                response.statusCode().value(),
+                                body)))
                 .bodyToMono(AiCompletionResponse.class)
                 .timeout(readTimeout)
+                .onErrorMap(this::toAiServerException)
                 .block();
+    }
+
+    @Override
+    public boolean isAvailable() {
+        try {
+            Integer statusCode = webClient.get()
+                    .uri(COMPLETIONS_PATH)
+                    .accept(MediaType.APPLICATION_JSON)
+                    .exchangeToMono(response -> Mono.just(response.statusCode().value()))
+                    .timeout(Duration.ofSeconds(3))
+                    .onErrorReturn(-1)
+                    .block();
+
+            return statusCode != null && AVAILABLE_STATUS_CODES.contains(statusCode);
+        } catch (Exception ignored) {
+            return false;
+        }
     }
 
     @Override
@@ -169,5 +199,12 @@ public class AiServerWebClient implements AiServerClient {
     private boolean looksLikeHtml(String value) {
         String lower = value.toLowerCase();
         return lower.startsWith("<!doctype html") || lower.startsWith("<html") || lower.contains("<body");
+    }
+
+    private Throwable toAiServerException(Throwable throwable) {
+        if (throwable instanceof AiServerException) {
+            return throwable;
+        }
+        return new AiServerException("AI server call error: " + throwable.getMessage(), throwable);
     }
 }
