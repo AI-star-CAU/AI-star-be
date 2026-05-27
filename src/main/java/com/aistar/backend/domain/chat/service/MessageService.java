@@ -132,7 +132,7 @@ public class MessageService {
                 aiServerClient.streamChatCompletion(
                         new AiChatRequest(
                                 ctx.userMessage().getContent(),
-                                512,
+                                1024,
                                 0.7,
                                 null,
                                 ctxHolder[0].messages()
@@ -187,6 +187,13 @@ public class MessageService {
 
                 // 비동기 summary 생성
                 generateSummaryAsync(ctx.turn().getId(), fullContent);
+
+                // 첫 턴이고 제목이 PENDING이면 비동기 제목 생성
+                if (ctx.turn().getTurnSequence() == 1
+                        && ctx.chat().getTitleStatus() == TitleStatus.PENDING) {
+                    generateTitleAsync(ctx.chat().getId(),
+                            ctx.userMessage().getContent(), fullContent);
+                }
 
             } catch (CancelException e) {
                 String partialContent = streamCtx.contentBuffer().toString();
@@ -474,6 +481,39 @@ public class MessageService {
                     });
                 } catch (Exception ex) {
                     log.error("Summary fallback 저장 실패 turnId={}", turnId, ex);
+                }
+            }
+        });
+    }
+
+    private void generateTitleAsync(Long chatId, String userContent, String aiContent) {
+        Thread.startVirtualThread(() -> {
+            try {
+                String context = userContent + "\n" + aiContent;
+                var response = aiServerClient.generateBranchTitle(
+                        new com.aistar.backend.domain.llm.dto.AiBranchTitleRequest(chatId, null, context));
+                String title = response != null && response.title() != null
+                        ? response.title()
+                        : userContent.length() > 20 ? userContent.substring(0, 20) : userContent;
+                transactionTemplate.executeWithoutResult(status -> {
+                    Chat chat = chatRepository.findById(chatId).orElseThrow();
+                    if (chat.getTitleStatus() == TitleStatus.PENDING) {
+                        chat.updateGeneratedTitle(title);
+                    }
+                });
+            } catch (Exception e) {
+                log.error("제목 생성 실패 chatId={}, AI 호출 실패 — fallback 사용", chatId, e);
+                try {
+                    String fallback = userContent.length() > 20
+                            ? userContent.substring(0, 20) : userContent;
+                    transactionTemplate.executeWithoutResult(status -> {
+                        Chat chat = chatRepository.findById(chatId).orElseThrow();
+                        if (chat.getTitleStatus() == TitleStatus.PENDING) {
+                            chat.updateGeneratedTitle(fallback);
+                        }
+                    });
+                } catch (Exception ex) {
+                    log.error("제목 fallback 저장 실패 chatId={}", chatId, ex);
                 }
             }
         });

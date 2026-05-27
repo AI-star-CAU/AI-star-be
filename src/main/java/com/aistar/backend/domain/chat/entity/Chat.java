@@ -97,6 +97,11 @@ public class Chat extends BaseEntity {
         this.titleStatus = TitleStatus.USER_EDITED;
     }
 
+    public void updateGeneratedTitle(String title) {
+        this.title = title;
+        this.titleStatus = TitleStatus.GENERATED;
+    }
+
     public void touchLastActivityAt() {
         this.lastActivityAt = LocalDateTime.now();
     }
