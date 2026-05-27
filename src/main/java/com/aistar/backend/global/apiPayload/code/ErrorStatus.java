@@ -50,6 +50,7 @@ public enum ErrorStatus implements BaseErrorCode {
     USAGE_NOT_FOUND(HttpStatus.NOT_FOUND, "USAGE_4041", "사용량 기록을 찾을 수 없습니다."),
 
     // LLM
+    AI_SERVER_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "LLM_5031", "ai server가 점검중입니다."),
     LLM_CALL_FAILED(HttpStatus.INTERNAL_SERVER_ERROR, "LLM_5001", "LLM 서비스 호출에 실패했습니다."),
     ;
 

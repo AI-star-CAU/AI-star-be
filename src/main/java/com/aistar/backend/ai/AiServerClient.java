@@ -15,6 +15,8 @@ public interface AiServerClient {
 
     AiCompletionResponse complete(AiChatRequest request);
 
+    boolean isAvailable();
+
     AiSummaryResponse generateSummary(AiSummaryRequest request);
 
     AiBranchTitleResponse generateBranchTitle(AiBranchTitleRequest request);

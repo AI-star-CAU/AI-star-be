@@ -1,6 +1,7 @@
 package com.aistar.backend.domain.chat.service;
 
 import com.aistar.backend.ai.AiServerClient;
+import com.aistar.backend.ai.AiServerException;
 import com.aistar.backend.ai.dto.AiChatRequest;
 import com.aistar.backend.domain.chat.dto.MessageResDto;
 import com.aistar.backend.domain.chat.entity.Chat;
@@ -23,8 +24,12 @@ import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
+import java.net.UnknownHostException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
@@ -224,9 +229,11 @@ public class MessageService {
                                     ctxHolder[0].compressedTurnCount());
                         }
                     });
+                    ErrorStatus errorStatus = resolveAiErrorStatus(e);
                     sendEvent(emitter, "error", MessageResDto.SseError.builder()
-                            .code(ErrorStatus.LLM_CALL_FAILED.getCode())
-                            .message(ErrorStatus.LLM_CALL_FAILED.getMessage())
+                            .code(errorStatus.getCode())
+                            .message(errorStatus.getMessage())
+                            .retryable(errorStatus == ErrorStatus.AI_SERVER_UNAVAILABLE)
                             .build());
                     sendDoneAndComplete(emitter);
                 } catch (IOException ignored) {
@@ -474,6 +481,30 @@ public class MessageService {
         emitter.send(SseEmitter.event()
                 .name(eventName)
                 .data(objectMapper.writeValueAsString(data)));
+    }
+
+    private ErrorStatus resolveAiErrorStatus(Exception e) {
+        if (isAiServerUnavailable(e)) {
+            return ErrorStatus.AI_SERVER_UNAVAILABLE;
+        }
+        return ErrorStatus.LLM_CALL_FAILED;
+    }
+
+    private boolean isAiServerUnavailable(Throwable throwable) {
+        Throwable current = throwable;
+        while (current != null) {
+            if (current instanceof AiServerException aiServerException && aiServerException.isLikelyUnavailable()) {
+                return true;
+            }
+            if (current instanceof TimeoutException
+                    || current instanceof SocketTimeoutException
+                    || current instanceof ConnectException
+                    || current instanceof UnknownHostException) {
+                return true;
+            }
+            current = current.getCause();
+        }
+        return false;
     }
 
     public record TurnContext(Chat chat, Turn turn, Message userMessage, Message aiMessage,
