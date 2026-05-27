@@ -10,13 +10,17 @@ public class ChatReqDto {
 
     public record Create(
             String title,
-
-            @NotNull(message = "LLM 제공자는 필수입니다.")
             LlmProvider llmProvider,
-
-            @NotNull(message = "LLM 모델은 필수입니다.")
             LlmModel llmModel
-    ) {}
+    ) {
+        public LlmProvider llmProviderOrDefault() {
+            return llmProvider != null ? llmProvider : LlmProvider.LOCAL;
+        }
+
+        public LlmModel llmModelOrDefault() {
+            return llmModel != null ? llmModel : LlmModel.LOCAL_DEFAULT;
+        }
+    }
 
     public record BranchCreate(
             @NotNull(message = "분기점 turn ID는 필수입니다.")

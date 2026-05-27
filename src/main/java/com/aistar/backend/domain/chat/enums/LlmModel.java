@@ -9,6 +9,7 @@ import lombok.RequiredArgsConstructor;
 @RequiredArgsConstructor
 public enum LlmModel {
 
+    LOCAL_DEFAULT("local-default", LlmProvider.LOCAL, 128_000),
     GPT_4O_MINI("gpt-4o-mini", LlmProvider.OPENAI, 128_000),
     GEMINI_2_0_FLASH("gemini-2.0-flash", LlmProvider.GOOGLE, 1_048_576),
     CLAUDE_3_5_SONNET("claude-3.5-sonnet", LlmProvider.ANTHROPIC, 200_000),

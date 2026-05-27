@@ -40,8 +40,8 @@ public class ChatService {
         Chat chat = Chat.builder()
                 .title(dto.title())
                 .titleStatus(dto.title() != null ? TitleStatus.USER_EDITED : TitleStatus.PENDING)
-                .llmProvider(dto.llmProvider())
-                .llmModel(dto.llmModel())
+                .llmProvider(dto.llmProviderOrDefault())
+                .llmModel(dto.llmModelOrDefault())
                 .member(member)
                 .build();
 

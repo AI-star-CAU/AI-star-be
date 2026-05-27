@@ -67,8 +67,8 @@ class Phase3ApiTest {
     private Chat createChat(Member member) {
         Chat chat = Chat.builder()
                 .title("테스트 대화")
-                .llmProvider(LlmProvider.OPENAI)
-                .llmModel(LlmModel.GPT_4O_MINI)
+                .llmProvider(LlmProvider.LOCAL)
+                .llmModel(LlmModel.LOCAL_DEFAULT)
                 .member(member)
                 .build();
         chatRepository.saveAndFlush(chat);
@@ -146,7 +146,7 @@ class Phase3ApiTest {
                     .andExpect(jsonPath("$.result.branchPointTurnId").value(turn1.getId()))
                     .andExpect(jsonPath("$.result.title").value("분기 테스트"))
                     .andExpect(jsonPath("$.result.titleStatus").value("USER_EDITED"))
-                    .andExpect(jsonPath("$.result.llmModel").value("gpt-4o-mini"));
+                    .andExpect(jsonPath("$.result.llmModel").value("local-default"));
         }
 
         @Test

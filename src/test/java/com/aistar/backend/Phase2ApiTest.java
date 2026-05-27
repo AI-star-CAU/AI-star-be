@@ -62,8 +62,8 @@ class Phase2ApiTest {
     private Chat createChat(Member member) {
         Chat chat = Chat.builder()
                 .title("테스트 대화")
-                .llmProvider(LlmProvider.OPENAI)
-                .llmModel(LlmModel.GPT_4O_MINI)
+                .llmProvider(LlmProvider.LOCAL)
+                .llmModel(LlmModel.LOCAL_DEFAULT)
                 .member(member)
                 .build();
         chatRepository.saveAndFlush(chat);
@@ -178,12 +178,12 @@ class Phase2ApiTest {
                         .header("Authorization", "Bearer " + tokenFor(member))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("""
-                                {"title":"새 대화","llmProvider":"OPENAI","llmModel":"gpt-4o-mini"}
+                                {"title":"새 대화","llmProvider":"LOCAL","llmModel":"local-default"}
                                 """))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.isSuccess").value(true))
                 .andExpect(jsonPath("$.result.title").value("새 대화"))
-                .andExpect(jsonPath("$.result.llmModel").value("gpt-4o-mini"));
+                .andExpect(jsonPath("$.result.llmModel").value("local-default"));
     }
 
     @Test

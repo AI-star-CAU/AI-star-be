@@ -60,8 +60,8 @@ public class DataInitializer implements ApplicationRunner {
         Chat chat1 = chatRepository.save(Chat.builder()
                 .member(member)
                 .title("Spring Boot 질문")
-                .llmProvider(LlmProvider.OPENAI)
-                .llmModel(LlmModel.GPT_4O_MINI)
+                .llmProvider(LlmProvider.LOCAL)
+                .llmModel(LlmModel.LOCAL_DEFAULT)
                 .build());
         chat1.initRootChatId();
 
@@ -81,8 +81,8 @@ public class DataInitializer implements ApplicationRunner {
         Chat chat2 = chatRepository.save(Chat.builder()
                 .member(member)
                 .title("Git 브랜치 전략")
-                .llmProvider(LlmProvider.GOOGLE)
-                .llmModel(LlmModel.GEMINI_2_0_FLASH)
+                .llmProvider(LlmProvider.LOCAL)
+                .llmModel(LlmModel.LOCAL_DEFAULT)
                 .build());
         chat2.initRootChatId();
 
@@ -98,8 +98,8 @@ public class DataInitializer implements ApplicationRunner {
         Chat chat3 = chatRepository.save(Chat.builder()
                 .member(member)
                 .title(null)
-                .llmProvider(LlmProvider.ANTHROPIC)
-                .llmModel(LlmModel.CLAUDE_3_5_SONNET)
+                .llmProvider(LlmProvider.LOCAL)
+                .llmModel(LlmModel.LOCAL_DEFAULT)
                 .build());
         chat3.initRootChatId();
 

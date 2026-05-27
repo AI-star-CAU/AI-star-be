@@ -68,8 +68,8 @@ class Phase4ApiTest {
     private Chat createChat(Member member) {
         Chat chat = Chat.builder()
                 .title("테스트 대화")
-                .llmProvider(LlmProvider.OPENAI)
-                .llmModel(LlmModel.GPT_4O_MINI)
+                .llmProvider(LlmProvider.LOCAL)
+                .llmModel(LlmModel.LOCAL_DEFAULT)
                 .member(member)
                 .build();
         chatRepository.saveAndFlush(chat);
@@ -81,8 +81,8 @@ class Phase4ApiTest {
     private Chat createChatWithTitle(Member member, String title) {
         Chat chat = Chat.builder()
                 .title(title)
-                .llmProvider(LlmProvider.OPENAI)
-                .llmModel(LlmModel.GPT_4O_MINI)
+                .llmProvider(LlmProvider.LOCAL)
+                .llmModel(LlmModel.LOCAL_DEFAULT)
                 .member(member)
                 .build();
         chatRepository.saveAndFlush(chat);

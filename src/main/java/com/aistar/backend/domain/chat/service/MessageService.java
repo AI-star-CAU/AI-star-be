@@ -126,8 +126,7 @@ public class MessageService {
 
                 // 2. 맥락 조립 + 압축 (§3.1, §3.2)
                 ctxHolder[0] = contextAssembler.buildContext(
-                        ctx.chat(), ctx.turn(), ctx.userMessage().getContent(),
-                        ctx.chat().getLlmModel());
+                        ctx.chat(), ctx.turn(), ctx.userMessage().getContent());
 
                 // 3. AI server streaming
                 aiServerClient.streamChatCompletion(
@@ -455,14 +454,27 @@ public class MessageService {
     private void generateSummaryAsync(Long turnId, String fullContent) {
         Thread.startVirtualThread(() -> {
             try {
-                String summary = fullContent.length() > 50
-                        ? fullContent.substring(0, 50) : fullContent;
+                var response = aiServerClient.generateSummary(
+                        new com.aistar.backend.domain.llm.dto.AiSummaryRequest(turnId, fullContent));
+                String summary = response != null && response.summary() != null
+                        ? response.summary()
+                        : fullContent.length() > 50 ? fullContent.substring(0, 50) : fullContent;
                 transactionTemplate.executeWithoutResult(status -> {
                     Turn turn = turnRepository.findById(turnId).orElseThrow();
                     turn.updateSummary(summary);
                 });
             } catch (Exception e) {
-                log.error("Summary 생성 실패 turnId={}", turnId, e);
+                log.error("Summary 생성 실패 turnId={}, AI 요약 실패 — fallback 사용", turnId, e);
+                try {
+                    String fallback = fullContent.length() > 50
+                            ? fullContent.substring(0, 50) : fullContent;
+                    transactionTemplate.executeWithoutResult(status -> {
+                        Turn turn = turnRepository.findById(turnId).orElseThrow();
+                        turn.updateSummary(fallback);
+                    });
+                } catch (Exception ex) {
+                    log.error("Summary fallback 저장 실패 turnId={}", turnId, ex);
+                }
             }
         });
     }

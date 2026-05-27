@@ -7,6 +7,7 @@ public record AiServerProperties(
         String baseUrl,
         int connectTimeout,
         int readTimeout,
+        int contextWindow,
         String apiKey,
         String cfAccessClientId,
         String cfAccessClientSecret

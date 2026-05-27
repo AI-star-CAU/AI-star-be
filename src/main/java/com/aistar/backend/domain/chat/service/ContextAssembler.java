@@ -3,10 +3,10 @@ package com.aistar.backend.domain.chat.service;
 import com.aistar.backend.domain.chat.entity.Chat;
 import com.aistar.backend.domain.chat.entity.Message;
 import com.aistar.backend.domain.chat.entity.Turn;
-import com.aistar.backend.domain.chat.enums.LlmModel;
 import com.aistar.backend.domain.chat.enums.SenderType;
 import com.aistar.backend.domain.chat.repository.ChatRepository;
 import com.aistar.backend.domain.chat.repository.TurnRepository;
+import com.aistar.backend.domain.llm.config.AiServerProperties;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -25,6 +25,7 @@ public class ContextAssembler {
 
     private final ChatRepository chatRepository;
     private final TurnRepository turnRepository;
+    private final AiServerProperties aiServerProperties;
 
     public record ContextResult(
             List<Map<String, String>> messages,
@@ -39,7 +40,7 @@ public class ContextAssembler {
      */
     @Transactional(readOnly = true)
     public ContextResult buildContext(Chat targetChat, Turn currentTurn,
-                                      String newUserContent, LlmModel model) {
+                                      String newUserContent) {
         List<Chat> chain = buildAncestorChain(targetChat);
 
         // 1. 턴 수집 (Turn entity 유지 — 압축 시 summary 참조 필요)
@@ -59,7 +60,7 @@ public class ContextAssembler {
         }
 
         // 3. 압축 (§3.2)
-        int threshold = (int) (model.getContextWindow() * COMPRESSION_RATIO);
+        int threshold = (int) (aiServerProperties.contextWindow() * COMPRESSION_RATIO);
         int totalTokens = estimateTokensForGroups(turnMessageGroups)
                 + estimateTokens(newUserContent);
         boolean compressionApplied = false;

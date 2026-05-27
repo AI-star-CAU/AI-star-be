@@ -16,3 +16,13 @@ spring:
 jwt:
   secret: testSecretKeyForTestingOnlyMustBeAtLeast256BitsLong!!
   expiration: 43200000
+
+ai:
+  server:
+    base-url: http://localhost:9999
+    connect-timeout: 1000
+    read-timeout: 5000
+    context-window: 128000
+    api-key: ""
+    cf-access-client-id: ""
+    cf-access-client-secret: ""

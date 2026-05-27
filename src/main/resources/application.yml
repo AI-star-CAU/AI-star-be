@@ -28,6 +28,7 @@ ai:
     base-url: ${AI_SERVER_BASE_URL:https://ait.hanbin5.com}
     connect-timeout: 3000
     read-timeout: 60000
+    context-window: 128000
     api-key: ${AISTAR_AI_API_KEY:}
     cf-access-client-id: ${CF_ACCESS_CLIENT_ID:}
     cf-access-client-secret: ${CF_ACCESS_CLIENT_SECRET:}
