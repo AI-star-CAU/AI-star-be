@@ -188,9 +188,8 @@ public class MessageService {
                 // 비동기 summary 생성
                 generateSummaryAsync(ctx.turn().getId(), fullContent);
 
-                // 첫 턴이고 제목이 PENDING이면 비동기 제목 생성
-                if (ctx.turn().getTurnSequence() == 1
-                        && ctx.chat().getTitleStatus() == TitleStatus.PENDING) {
+                // 제목이 PENDING이면 비동기 제목 생성
+                if (ctx.chat().getTitleStatus() == TitleStatus.PENDING) {
                     generateTitleAsync(ctx.chat().getId(),
                             ctx.userMessage().getContent(), fullContent);
                 }
