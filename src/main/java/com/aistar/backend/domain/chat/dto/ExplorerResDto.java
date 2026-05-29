@@ -1,7 +1,7 @@
 package com.aistar.backend.domain.chat.dto;
 
-import com.aistar.backend.domain.chat.enums.LlmModel;
-import com.aistar.backend.domain.chat.enums.LlmProvider;
+import com.aistar.backend.domain.llm.enums.LlmModel;
+import com.aistar.backend.domain.llm.enums.LlmProvider;
 import com.aistar.backend.domain.chat.enums.TitleStatus;
 import lombok.Builder;
 
@@ -41,3 +41,4 @@ public class ExplorerResDto {
             LlmModel llmModel
     ) {}
 }
+

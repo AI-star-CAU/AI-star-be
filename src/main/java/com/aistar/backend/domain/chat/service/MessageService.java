@@ -1,8 +1,5 @@
 package com.aistar.backend.domain.chat.service;
 
-import com.aistar.backend.domain.llm.client.AiServerClient;
-import com.aistar.backend.domain.llm.client.AiServerException;
-import com.aistar.backend.domain.llm.dto.AiChatRequest;
 import com.aistar.backend.domain.chat.dto.MessageResDto;
 import com.aistar.backend.domain.chat.entity.Chat;
 import com.aistar.backend.domain.chat.entity.Message;
@@ -15,22 +12,11 @@ import com.aistar.backend.domain.chat.repository.MessageRepository;
 import com.aistar.backend.domain.chat.repository.TurnRepository;
 import com.aistar.backend.global.apiPayload.code.ErrorStatus;
 import com.aistar.backend.global.apiPayload.exception.ProjectException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
-
-import java.io.IOException;
-import java.net.ConnectException;
-import java.net.SocketTimeoutException;
-import java.net.UnknownHostException;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 @Slf4j
 @Service
@@ -40,25 +26,8 @@ public class MessageService {
     private final ChatRepository chatRepository;
     private final TurnRepository turnRepository;
     private final MessageRepository messageRepository;
-    private final ChatService chatService;
-    private final ContextAssembler contextAssembler;
-    private final AiServerClient aiServerClient;
-    private final ObjectMapper objectMapper;
-    private final TransactionTemplate transactionTemplate;
-    private final com.aistar.backend.domain.usage.service.UsageService usageService;
-
-    private static final long SSE_TIMEOUT = 60_000L * 5;
-
-    // 스트리밍 중인 메시지 ID → 스트리밍 컨텍스트
-    private final Map<Long, StreamingContext> streamingContexts = new ConcurrentHashMap<>();
-
-    // ── 스트리밍 컨텍스트 (cancel 경합 해결) ──
-
-    record StreamingContext(AtomicBoolean canceled, StringBuffer contentBuffer) {
-        static StreamingContext create() {
-            return new StreamingContext(new AtomicBoolean(false), new StringBuffer());
-        }
-    }
+    private final MessageStreamingService messageStreamingService;
+    private final StreamingRegistry streamingRegistry;
 
     // ── Turn + Message 생성 (소유권 검증 포함) ──
 
@@ -102,149 +71,7 @@ public class MessageService {
     // ── SSE 스트리밍 ──
 
     public SseEmitter streamMessage(TurnContext ctx) {
-        SseEmitter emitter = new SseEmitter(SSE_TIMEOUT);
-        Long aiMessageId = ctx.aiMessage().getId();
-
-        StreamingContext streamCtx = StreamingContext.create();
-        streamingContexts.put(aiMessageId, streamCtx);
-
-        Thread.startVirtualThread(() -> {
-            final ContextAssembler.ContextResult[] ctxHolder = {null};
-            try {
-                // 0. branch_created (재생성/수정 시)
-                if (ctx.branchCreated() != null) {
-                    sendEvent(emitter, "branch_created", ctx.branchCreated());
-                }
-
-                // 1. turn_started
-                sendEvent(emitter, "turn_started", MessageResDto.TurnStarted.builder()
-                        .chatId(ctx.chat().getId())
-                        .turnId(ctx.turn().getId())
-                        .userMessageId(ctx.userMessage().getId())
-                        .aiMessageId(aiMessageId)
-                        .build());
-
-                // 2. 맥락 조립 + 압축 (§3.1, §3.2)
-                ctxHolder[0] = contextAssembler.buildContext(
-                        ctx.chat(), ctx.turn(), ctx.userMessage().getContent(),
-                        ctx.chat().getLlmModel());
-
-                // 3. AI server streaming
-                aiServerClient.streamChatCompletion(
-                        new AiChatRequest(
-                                ctx.userMessage().getContent(),
-                                512,
-                                0.7,
-                                null,
-                                ctxHolder[0].messages()
-                        ),
-                        chunk -> {
-                            if (streamCtx.canceled().get()) {
-                                throw new CancelException();
-                            }
-                            streamCtx.contentBuffer().append(chunk);
-                            try {
-                                sendEvent(emitter, "chunk", MessageResDto.Chunk.builder()
-                                        .text(chunk).build());
-                            } catch (IOException e) {
-                                throw new RuntimeException(e);
-                            }
-                        }
-                );
-
-                // 4. 완료 처리
-                String fullContent = streamCtx.contentBuffer().toString();
-                int answerToken = fullContent.split("\\s+").length;
-                Long memberId = ctx.chat().getMember().getId();
-
-                transactionTemplate.executeWithoutResult(status -> {
-                    Message message = messageRepository.findById(aiMessageId).orElseThrow();
-                    if (message.getStatus() == MessageStatus.STREAMING) {
-                        message.updateContent(fullContent);
-                        message.updateStatus(MessageStatus.COMPLETED);
-                        message.updateAnswerToken(answerToken);
-                        message.updatePromptToken(ctxHolder[0].contextTokens());
-                    }
-                    Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
-                    chat.updateLastTurnId(ctx.turn().getId());
-                    chat.touchUpdatedAt();
-                    chatService.touchAncestorChain(ctx.chat().getId());
-                    usageService.accumulateUsage(memberId,
-                            ctxHolder[0].contextTokens(), answerToken,
-                            ctxHolder[0].compressedTurnCount());
-                });
-
-                sendEvent(emitter, "turn_completed", MessageResDto.TurnCompleted.builder()
-                        .turnId(ctx.turn().getId())
-                        .aiMessageId(aiMessageId)
-                        .answerToken(answerToken)
-                        .summaryStatus("PENDING")
-                        .contextTokens(ctxHolder[0].contextTokens())
-                        .compressionApplied(ctxHolder[0].compressionApplied())
-                        .compressedTurnCount(ctxHolder[0].compressedTurnCount())
-                        .build());
-
-                sendDoneAndComplete(emitter);
-
-                // 비동기 summary 생성
-                generateSummaryAsync(ctx.turn().getId(), fullContent);
-
-            } catch (CancelException e) {
-                String partialContent = streamCtx.contentBuffer().toString();
-                Integer partialToken = partialContent.isEmpty() ? null : partialContent.split("\\s+").length;
-
-                transactionTemplate.executeWithoutResult(status -> {
-                    Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
-                    chat.touchUpdatedAt();
-                    if (ctxHolder[0] != null) {
-                        usageService.accumulateUsage(ctx.chat().getMember().getId(),
-                                ctxHolder[0].contextTokens(),
-                                partialToken != null ? partialToken : 0,
-                                ctxHolder[0].compressedTurnCount());
-                    }
-                });
-
-                try {
-                    sendEvent(emitter, "cancelled", MessageResDto.Cancelled.builder()
-                            .aiMessageId(aiMessageId)
-                            .status(MessageStatus.CANCELED)
-                            .content(partialContent.isEmpty() ? null : partialContent)
-                            .answerToken(partialToken)
-                            .build());
-                } catch (IOException ignored) {
-                }
-                sendDoneAndComplete(emitter);
-
-            } catch (Exception e) {
-                log.error("SSE 스트리밍 실패", e);
-                try {
-                    transactionTemplate.executeWithoutResult(status -> {
-                        Message message = messageRepository.findById(aiMessageId).orElseThrow();
-                        message.updateStatus(MessageStatus.FAILED);
-                        Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
-                        chat.touchUpdatedAt();
-                        if (ctxHolder[0] != null) {
-                            usageService.accumulateUsage(ctx.chat().getMember().getId(),
-                                    ctxHolder[0].contextTokens(), 0,
-                                    ctxHolder[0].compressedTurnCount());
-                        }
-                    });
-                    ErrorStatus errorStatus = resolveAiErrorStatus(e);
-                    sendEvent(emitter, "error", MessageResDto.SseError.builder()
-                            .code(errorStatus.getCode())
-                            .message(errorStatus.getMessage())
-                            .retryable(errorStatus == ErrorStatus.AI_SERVER_UNAVAILABLE)
-                            .build());
-                    sendDoneAndComplete(emitter);
-                } catch (IOException ignored) {
-                    emitter.completeWithError(e);
-                }
-            } finally {
-                streamingContexts.remove(aiMessageId);
-            }
-        });
-
-        return emitter;
+        return messageStreamingService.streamMessage(ctx);
     }
 
     // ── Cancel ──
@@ -277,9 +104,9 @@ public class MessageService {
         switch (message.getStatus()) {
             case STREAMING -> {
                 // cancel 시그널 + buffer에서 부분 content 읽기
-                StreamingContext streamCtx = streamingContexts.get(messageId);
+                StreamingRegistry.StreamingContext streamCtx = streamingRegistry.find(messageId);
                 if (streamCtx != null) {
-                    streamCtx.canceled().set(true);
+                    streamingRegistry.cancel(messageId);
                     String buffered = streamCtx.contentBuffer().toString();
                     if (!buffered.isEmpty()) {
                         partialContent = buffered;
@@ -334,10 +161,7 @@ public class MessageService {
 
         // STREAMING 중이면 기존 스트리밍을 cancel한 후 진행
         if (message.getStatus() == MessageStatus.STREAMING) {
-            StreamingContext streamCtx = streamingContexts.get(messageId);
-            if (streamCtx != null) {
-                streamCtx.canceled().set(true);
-            }
+            streamingRegistry.cancel(messageId);
         }
 
         Turn targetTurn = message.getTurn();
@@ -450,69 +274,10 @@ public class MessageService {
         throw new ProjectException(ErrorStatus.MESSAGE_ACTION_NOT_ALLOWED);
     }
 
-    // ── 비동기 summary 생성 ──
-
-    private void generateSummaryAsync(Long turnId, String fullContent) {
-        Thread.startVirtualThread(() -> {
-            try {
-                String summary = fullContent.length() > 50
-                        ? fullContent.substring(0, 50) : fullContent;
-                transactionTemplate.executeWithoutResult(status -> {
-                    Turn turn = turnRepository.findById(turnId).orElseThrow();
-                    turn.updateSummary(summary);
-                });
-            } catch (Exception e) {
-                log.error("Summary 생성 실패 turnId={}", turnId, e);
-            }
-        });
-    }
-
-    // ── 내부 유틸 ──
-
-    private void sendDoneAndComplete(SseEmitter emitter) {
-        try {
-            sendEvent(emitter, "done", new MessageResDto.Done());
-        } catch (IOException ignored) {
-        }
-        emitter.complete();
-    }
-
-    private void sendEvent(SseEmitter emitter, String eventName, Object data) throws IOException {
-        emitter.send(SseEmitter.event()
-                .name(eventName)
-                .data(objectMapper.writeValueAsString(data)));
-    }
-
-    private ErrorStatus resolveAiErrorStatus(Exception e) {
-        if (isAiServerUnavailable(e)) {
-            return ErrorStatus.AI_SERVER_UNAVAILABLE;
-        }
-        return ErrorStatus.LLM_CALL_FAILED;
-    }
-
-    private boolean isAiServerUnavailable(Throwable throwable) {
-        Throwable current = throwable;
-        while (current != null) {
-            if (current instanceof AiServerException aiServerException && aiServerException.isLikelyUnavailable()) {
-                return true;
-            }
-            if (current instanceof TimeoutException
-                    || current instanceof SocketTimeoutException
-                    || current instanceof ConnectException
-                    || current instanceof UnknownHostException) {
-                return true;
-            }
-            current = current.getCause();
-        }
-        return false;
-    }
-
     public record TurnContext(Chat chat, Turn turn, Message userMessage, Message aiMessage,
                                MessageResDto.BranchCreated branchCreated) {
         TurnContext(Chat chat, Turn turn, Message userMessage, Message aiMessage) {
             this(chat, turn, userMessage, aiMessage, null);
         }
     }
-
-    private static class CancelException extends RuntimeException {}
 }

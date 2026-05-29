@@ -2,8 +2,8 @@ package com.aistar.backend;
 
 import com.aistar.backend.domain.chat.entity.Chat;
 import com.aistar.backend.domain.chat.entity.Message;
-import com.aistar.backend.domain.chat.enums.LlmModel;
-import com.aistar.backend.domain.chat.enums.LlmProvider;
+import com.aistar.backend.domain.llm.enums.LlmModel;
+import com.aistar.backend.domain.llm.enums.LlmProvider;
 import com.aistar.backend.domain.chat.enums.MessageStatus;
 import com.aistar.backend.domain.chat.enums.SenderType;
 import com.aistar.backend.domain.chat.repository.ChatRepository;
