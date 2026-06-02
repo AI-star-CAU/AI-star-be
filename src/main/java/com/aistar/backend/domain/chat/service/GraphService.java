@@ -5,14 +5,20 @@ import com.aistar.backend.domain.chat.entity.Chat;
 import com.aistar.backend.domain.chat.entity.Turn;
 import com.aistar.backend.domain.chat.repository.ChatRepository;
 import com.aistar.backend.domain.chat.repository.TurnRepository;
+import com.aistar.backend.domain.chat.service.graph.FrontierCalculator;
+import com.aistar.backend.domain.chat.service.graph.GraphNodeMapper;
+import com.aistar.backend.domain.chat.service.graph.TurnTraverser;
 import com.aistar.backend.global.apiPayload.code.ErrorStatus;
 import com.aistar.backend.global.apiPayload.exception.ProjectException;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @Service
@@ -21,11 +27,14 @@ public class GraphService {
 
     private final ChatRepository chatRepository;
     private final TurnRepository turnRepository;
+    private final TurnTraverser turnTraverser;
+    private final FrontierCalculator frontierCalculator;
+    private final GraphNodeMapper graphNodeMapper;
 
     @Transactional(readOnly = true)
     public GraphResDto.GraphResult getGraph(Long memberId, Long chatId,
-                                             Long centerTurnId, int up, int down,
-                                             boolean includeDeleted) {
+                                            Long centerTurnId, int up, int down,
+                                            boolean includeDeleted) {
         if (up < 1 || up > 100 || down < 1 || down > 100) {
             throw new ProjectException(ErrorStatus.GRAPH_INVALID_PARAM);
         }
@@ -35,53 +44,37 @@ public class GraphService {
         validateOwner(pathChat, memberId);
 
         Long rootChatId = pathChat.getRootChatId();
-
         List<Chat> allChats = includeDeleted
                 ? chatRepository.findAllByRootChatId(rootChatId)
                 : chatRepository.findAllByRootChatIdAndDeletedAtIsNull(rootChatId);
 
         Map<Long, Chat> chatMap = allChats.stream()
                 .collect(Collectors.toMap(Chat::getId, c -> c));
-
         Map<Long, List<Chat>> branchPointMap = allChats.stream()
                 .filter(c -> c.getBranchPointTurnId() != null)
                 .collect(Collectors.groupingBy(Chat::getBranchPointTurnId));
 
-        Turn centerTurn = resolveCenterTurn(pathChat, centerTurnId, chatMap);
-
+        Turn centerTurn = turnTraverser.resolveCenterTurn(pathChat, centerTurnId);
         if (centerTurn == null) {
-            return buildEmptyResult(rootChatId, allChats, chatMap);
+            return graphNodeMapper.buildEmptyResult(rootChatId, allChats, chatMap);
         }
 
-        // centerTurnId 명시 시 트리 소속 검증
         if (centerTurnId != null && !chatMap.containsKey(centerTurn.getChat().getId())) {
             throw new ProjectException(ErrorStatus.GRAPH_INVALID_PARAM);
         }
 
-        List<Turn> upTurns = traceUp(centerTurn, up, chatMap);
-        List<Turn> downTurns = traceDown(centerTurn, down, branchPointMap);
+        List<Turn> upTurns = turnTraverser.traceUp(centerTurn, up, chatMap);
+        List<Turn> downTurns = turnTraverser.traceDown(centerTurn, down, branchPointMap);
+        List<Turn> windowTurns = mergeWindowTurns(centerTurn, upTurns, downTurns);
 
-        // 중복 제거하며 합치기
-        Set<Long> seen = new LinkedHashSet<>();
-        List<Turn> windowTurns = new ArrayList<>();
-
-        seen.add(centerTurn.getId());
-        windowTurns.add(centerTurn);
-        for (Turn t : upTurns) {
-            if (seen.add(t.getId())) windowTurns.add(t);
-        }
-        for (Turn t : downTurns) {
-            if (seen.add(t.getId())) windowTurns.add(t);
-        }
-
-        GraphResDto.FrontierDto frontier = calculateFrontier(centerTurn, upTurns, downTurns, chatMap);
+        GraphResDto.FrontierDto frontier = frontierCalculator.calculateForGraph(
+                centerTurn, upTurns, downTurns, chatMap);
 
         List<GraphResDto.ChatNodeDto> chatNodes = allChats.stream()
-                .map(c -> toChatNodeDto(c, chatMap))
+                .map(c -> graphNodeMapper.toChatNodeDto(c, chatMap))
                 .toList();
-
         List<GraphResDto.TurnNodeDto> turnNodes = windowTurns.stream()
-                .map(t -> toTurnNodeDto(t, centerTurn.getId(), branchPointMap))
+                .map(t -> graphNodeMapper.toTurnNodeDto(t, centerTurn.getId(), branchPointMap))
                 .toList();
 
         return GraphResDto.GraphResult.builder()
@@ -96,191 +89,10 @@ public class GraphService {
                 .build();
     }
 
-    // ── Center Turn 결정 (§3.1.1 fallback) ──
-
-    private Turn resolveCenterTurn(Chat pathChat, Long centerTurnId, Map<Long, Chat> chatMap) {
-        if (centerTurnId != null) {
-            return turnRepository.findById(centerTurnId)
-                    .orElseThrow(() -> new ProjectException(ErrorStatus.TURN_NOT_FOUND));
-        }
-
-        // Rule 1: lastTurnId 존재
-        if (pathChat.getLastTurnId() != null) {
-            return turnRepository.findById(pathChat.getLastTurnId()).orElse(null);
-        }
-
-        // Rule 2: branch인데 lastTurnId 없음 → branchPointTurnId 사용
-        if (pathChat.getParentId() != null && pathChat.getBranchPointTurnId() != null) {
-            return turnRepository.findById(pathChat.getBranchPointTurnId()).orElse(null);
-        }
-
-        // Rule 3: root인데 turn 없음 → null (빈 응답)
-        return null;
-    }
-
-    // ── UP 탐색 (ancestor path, 단일 경로) ──
-
-    private List<Turn> traceUp(Turn centerTurn, int limit, Map<Long, Chat> chatMap) {
-        List<Turn> result = new ArrayList<>();
-        int remaining = limit;
-        Long currentChatId = centerTurn.getChat().getId();
-        int currentSequence = centerTurn.getTurnSequence();
-
-        while (remaining > 0) {
-            List<Turn> before = turnRepository
-                    .findByChatIdAndTurnSequenceLessThanOrderByTurnSequenceDesc(
-                            currentChatId, currentSequence, PageRequest.of(0, remaining));
-
-            result.addAll(before);
-            remaining -= before.size();
-            if (remaining <= 0) break;
-
-            // 부모 chat으로 점프
-            Chat chat = chatMap.get(currentChatId);
-            if (chat == null || chat.getParentId() == null || chat.getBranchPointTurnId() == null) {
-                break;
-            }
-
-            Turn branchPointTurn = turnRepository.findById(chat.getBranchPointTurnId()).orElse(null);
-            if (branchPointTurn == null) break;
-
-            result.add(branchPointTurn);
-            remaining--;
-            currentChatId = branchPointTurn.getChat().getId();
-            currentSequence = branchPointTurn.getTurnSequence();
-        }
-
-        return result;
-    }
-
-    // ── DOWN 탐색 (BFS, 다중 경로) ──
-
-    private List<Turn> traceDown(Turn centerTurn, int limit, Map<Long, List<Chat>> branchPointMap) {
-        List<Turn> result = new ArrayList<>();
-        Deque<long[]> queue = new ArrayDeque<>();
-        int remaining = limit;
-
-        queue.add(new long[]{centerTurn.getChat().getId(), centerTurn.getTurnSequence()});
-
-        while (!queue.isEmpty() && remaining > 0) {
-            long[] entry = queue.poll();
-            long chatId = entry[0];
-            int fromSeq = (int) entry[1];
-
-            List<Turn> after = turnRepository
-                    .findByChatIdAndTurnSequenceGreaterThanOrderByTurnSequenceAsc(
-                            chatId, fromSeq, PageRequest.of(0, remaining));
-
-            for (Turn turn : after) {
-                if (remaining <= 0) break;
-                result.add(turn);
-                remaining--;
-
-                List<Chat> children = branchPointMap.getOrDefault(turn.getId(), List.of());
-                for (Chat child : children) {
-                    queue.add(new long[]{child.getId(), 0});
-                }
-            }
-        }
-
-        return result;
-    }
-
-    // ── Frontier 계산 ──
-
-    private GraphResDto.FrontierDto calculateFrontier(Turn centerTurn, List<Turn> upTurns,
-                                                       List<Turn> downTurns, Map<Long, Chat> chatMap) {
-        // UP frontier: 가장 먼 ancestor
-        List<GraphResDto.FrontierPoint> upFrontier = new ArrayList<>();
-        if (!upTurns.isEmpty()) {
-            Turn farthest = upTurns.get(upTurns.size() - 1);
-            boolean hasMore = farthest.getTurnSequence() > 1;
-            if (!hasMore) {
-                Chat chat = chatMap.get(farthest.getChat().getId());
-                hasMore = chat != null && chat.getParentId() != null;
-            }
-            upFrontier.add(GraphResDto.FrontierPoint.builder()
-                    .fromTurnId(farthest.getId()).hasMore(hasMore).build());
-        }
-
-        // DOWN frontier: chat별 마지막 turn
-        Map<Long, Turn> lastPerChat = new LinkedHashMap<>();
-        lastPerChat.put(centerTurn.getChat().getId(), centerTurn);
-        for (Turn t : downTurns) {
-            lastPerChat.merge(t.getChat().getId(), t,
-                    (a, b) -> b.getTurnSequence() > a.getTurnSequence() ? b : a);
-        }
-
-        List<GraphResDto.FrontierPoint> downFrontier = new ArrayList<>();
-        for (Turn lastTurn : lastPerChat.values()) {
-            boolean hasMore = turnRepository.existsByChatIdAndTurnSequenceGreaterThan(
-                    lastTurn.getChat().getId(), lastTurn.getTurnSequence());
-            downFrontier.add(GraphResDto.FrontierPoint.builder()
-                    .fromTurnId(lastTurn.getId()).hasMore(hasMore).build());
-        }
-
-        return GraphResDto.FrontierDto.builder().up(upFrontier).down(downFrontier).build();
-    }
-
-    // ── DTO 변환 ──
-
-    private GraphResDto.ChatNodeDto toChatNodeDto(Chat chat, Map<Long, Chat> chatMap) {
-        return GraphResDto.ChatNodeDto.builder()
-                .chatId(chat.getId())
-                .title(chat.getTitle())
-                .titleStatus(chat.getTitleStatus())
-                .parentChatId(chat.getParentId())
-                .branchPointTurnId(chat.getBranchPointTurnId())
-                .depth(calculateDepth(chat, chatMap))
-                .isDeleted(chat.getDeletedAt() != null)
-                .lastTurnId(chat.getLastTurnId())
-                .updatedAt(chat.getUpdatedAt())
-                .build();
-    }
-
-    private GraphResDto.TurnNodeDto toTurnNodeDto(Turn turn, Long centerTurnId,
-                                                    Map<Long, List<Chat>> branchPointMap) {
-        return GraphResDto.TurnNodeDto.builder()
-                .turnId(turn.getId())
-                .chatId(turn.getChat().getId())
-                .turnSequence(turn.getTurnSequence())
-                .summary(turn.getSummary())
-                .summaryStatus(turn.getSummary() == null ? "PENDING" : "GENERATED")
-                .isBranchPoint(branchPointMap.containsKey(turn.getId()))
-                .isCurrent(turn.getId().equals(centerTurnId))
-                .createdAt(turn.getCreatedAt())
-                .build();
-    }
-
-    private int calculateDepth(Chat chat, Map<Long, Chat> chatMap) {
-        int depth = 0;
-        Long parentId = chat.getParentId();
-        while (parentId != null) {
-            depth++;
-            Chat parent = chatMap.get(parentId);
-            if (parent == null) break;
-            parentId = parent.getParentId();
-        }
-        return depth;
-    }
-
-    private GraphResDto.GraphResult buildEmptyResult(Long rootChatId, List<Chat> allChats,
-                                                      Map<Long, Chat> chatMap) {
-        return GraphResDto.GraphResult.builder()
-                .rootChatId(rootChatId)
-                .center(null)
-                .chats(allChats.stream().map(c -> toChatNodeDto(c, chatMap)).toList())
-                .turns(List.of())
-                .frontier(GraphResDto.FrontierDto.builder().up(List.of()).down(List.of()).build())
-                .build();
-    }
-
-    // ── 윈도우 확장 (§3.2) ──
-
     @Transactional(readOnly = true)
     public GraphResDto.ExpandResult expandWindow(Long memberId, Long chatId,
-                                                   Long fromTurnId, String direction,
-                                                   int limit, boolean includeDeleted) {
+                                                 Long fromTurnId, String direction,
+                                                 int limit, boolean includeDeleted) {
         if (limit < 1 || limit > 100) {
             throw new ProjectException(ErrorStatus.GRAPH_INVALID_PARAM);
         }
@@ -293,7 +105,6 @@ public class GraphService {
         validateOwner(pathChat, memberId);
 
         Long rootChatId = pathChat.getRootChatId();
-
         List<Chat> allChats = includeDeleted
                 ? chatRepository.findAllByRootChatId(rootChatId)
                 : chatRepository.findAllByRootChatIdAndDeletedAtIsNull(rootChatId);
@@ -303,8 +114,6 @@ public class GraphService {
 
         Turn fromTurn = turnRepository.findById(fromTurnId)
                 .orElseThrow(() -> new ProjectException(ErrorStatus.TURN_NOT_FOUND));
-
-        // fromTurnId가 트리에 속하는지 검증 (삭제된 chat 소속이면 chatMap에 없으므로 자동 차단)
         if (!chatMap.containsKey(fromTurn.getChat().getId())) {
             throw new ProjectException(ErrorStatus.GRAPH_INVALID_PARAM);
         }
@@ -315,43 +124,16 @@ public class GraphService {
 
         List<Turn> turns;
         GraphResDto.FrontierDto frontier;
-
         if ("UP".equals(direction)) {
-            turns = traceUp(fromTurn, limit, chatMap);
-
-            List<GraphResDto.FrontierPoint> upFrontier = new ArrayList<>();
-            if (!turns.isEmpty()) {
-                Turn farthest = turns.get(turns.size() - 1);
-                boolean hasMore = farthest.getTurnSequence() > 1;
-                if (!hasMore) {
-                    Chat chat = chatMap.get(farthest.getChat().getId());
-                    hasMore = chat != null && chat.getParentId() != null;
-                }
-                upFrontier.add(GraphResDto.FrontierPoint.builder()
-                        .fromTurnId(farthest.getId()).hasMore(hasMore).build());
-            }
-            frontier = GraphResDto.FrontierDto.builder().up(upFrontier).down(List.of()).build();
+            turns = turnTraverser.traceUp(fromTurn, limit, chatMap);
+            frontier = frontierCalculator.calculateForExpandUp(turns, chatMap);
         } else {
-            turns = traceDown(fromTurn, limit, branchPointMap);
-
-            Map<Long, Turn> lastPerChat = new LinkedHashMap<>();
-            for (Turn t : turns) {
-                lastPerChat.merge(t.getChat().getId(), t,
-                        (a, b) -> b.getTurnSequence() > a.getTurnSequence() ? b : a);
-            }
-            List<GraphResDto.FrontierPoint> downFrontier = new ArrayList<>();
-            for (Turn lastTurn : lastPerChat.values()) {
-                boolean hasMore = turnRepository.existsByChatIdAndTurnSequenceGreaterThan(
-                        lastTurn.getChat().getId(), lastTurn.getTurnSequence());
-                downFrontier.add(GraphResDto.FrontierPoint.builder()
-                        .fromTurnId(lastTurn.getId()).hasMore(hasMore).build());
-            }
-            frontier = GraphResDto.FrontierDto.builder().up(List.of()).down(downFrontier).build();
+            turns = turnTraverser.traceDown(fromTurn, limit, branchPointMap);
+            frontier = frontierCalculator.calculateForExpandDown(turns);
         }
 
-        // expand 응답의 isCurrent는 모두 false (centerTurnId = null)
         List<GraphResDto.TurnNodeDto> turnNodes = turns.stream()
-                .map(t -> toTurnNodeDto(t, null, branchPointMap))
+                .map(t -> graphNodeMapper.toTurnNodeDto(t, null, branchPointMap))
                 .toList();
 
         return GraphResDto.ExpandResult.builder()
@@ -359,6 +141,25 @@ public class GraphService {
                 .turns(turnNodes)
                 .frontier(frontier)
                 .build();
+    }
+
+    private List<Turn> mergeWindowTurns(Turn centerTurn, List<Turn> upTurns, List<Turn> downTurns) {
+        Set<Long> seen = new LinkedHashSet<>();
+        List<Turn> windowTurns = new ArrayList<>();
+
+        seen.add(centerTurn.getId());
+        windowTurns.add(centerTurn);
+        for (Turn turn : upTurns) {
+            if (seen.add(turn.getId())) {
+                windowTurns.add(turn);
+            }
+        }
+        for (Turn turn : downTurns) {
+            if (seen.add(turn.getId())) {
+                windowTurns.add(turn);
+            }
+        }
+        return windowTurns;
     }
 
     private void validateOwner(Chat chat, Long memberId) {

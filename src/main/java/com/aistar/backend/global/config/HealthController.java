@@ -1,6 +1,6 @@
 package com.aistar.backend.global.config;
 
-import com.aistar.backend.domain.llm.client.AiServerClient;
+import com.aistar.backend.domain.llm.client.LlmHealthClient;
 import lombok.RequiredArgsConstructor;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -11,7 +11,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class HealthController {
 
-    private final AiServerClient aiServerClient;
+    private final LlmHealthClient llmHealthClient;
 
     @GetMapping("/health")
     public Map<String, String> health() {
@@ -20,7 +20,7 @@ public class HealthController {
 
     @GetMapping("/health/ai-server")
     public Map<String, String> aiServerHealth() {
-        if (aiServerClient.isAvailable()) {
+        if (llmHealthClient.isAvailable()) {
             return Map.of("status", "up");
         }
         return Map.of(

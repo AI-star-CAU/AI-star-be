@@ -1,15 +1,10 @@
-package com.aistar.backend.domain.chat.enums;
+package com.aistar.backend.domain.llm.enums;
 
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonValue;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 
-/**
- * @deprecated LLM enum은 domain.llm.enums로 이동했다.
- * 신규 코드에서는 com.aistar.backend.domain.llm.enums.LlmModel을 사용한다.
- */
-@Deprecated
 @Getter
 @RequiredArgsConstructor
 public enum LlmModel {

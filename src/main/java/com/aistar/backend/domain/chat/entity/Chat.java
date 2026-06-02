@@ -1,7 +1,7 @@
 package com.aistar.backend.domain.chat.entity;
 
-import com.aistar.backend.domain.chat.enums.LlmModel;
-import com.aistar.backend.domain.chat.enums.LlmProvider;
+import com.aistar.backend.domain.llm.enums.LlmModel;
+import com.aistar.backend.domain.llm.enums.LlmProvider;
 import com.aistar.backend.domain.member.entity.Member;
 import com.aistar.backend.global.entity.BaseEntity;
 import com.aistar.backend.domain.chat.enums.TitleStatus;
@@ -106,3 +106,4 @@ public class Chat extends BaseEntity {
         this.lastActivityAt = LocalDateTime.now();
     }
 }
+
