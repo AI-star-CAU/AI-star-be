@@ -143,9 +143,16 @@ public class ChatService {
 
     @Transactional
     public void touchAncestorChain(Long chatId) {
+        Chat start = chatRepository.findById(chatId).orElse(null);
+        if (start == null) return;
+
+        // rootChatId 기준으로 트리 전체를 1회 조회 후 메모리에서 parent 탐색
+        Map<Long, Chat> chatMap = chatRepository.findAllByRootChatId(start.getRootChatId())
+                .stream().collect(Collectors.toMap(Chat::getId, c -> c));
+
         Long currentId = chatId;
         while (currentId != null) {
-            Chat chat = chatRepository.findById(currentId).orElse(null);
+            Chat chat = chatMap.get(currentId);
             if (chat == null) break;
             chat.touchLastActivityAt();
             currentId = chat.getParentId();

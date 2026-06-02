@@ -89,7 +89,9 @@ public class MessageStreamingService {
 
                 String fullContent = streamCtx.contentBuffer().toString();
                 int answerToken = fullContent.split("\\s+").length;
-                Long memberId = ctx.chat().getMember().getId();
+                Long memberId = ctx.memberId();
+                Long chatId = ctx.chat().getId();
+                Long turnId = ctx.turn().getId();
 
                 transactionTemplate.executeWithoutResult(status -> {
                     Message message = messageRepository.findById(aiMessageId).orElseThrow();
@@ -99,14 +101,14 @@ public class MessageStreamingService {
                         message.updateAnswerToken(answerToken);
                         message.updatePromptToken(ctxHolder[0].contextTokens());
                     }
-                    Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
-                    chat.updateLastTurnId(ctx.turn().getId());
+                    Chat chat = chatRepository.findById(chatId).orElseThrow();
+                    chat.updateLastTurnId(turnId);
                     chat.touchUpdatedAt();
-                    chatService.touchAncestorChain(ctx.chat().getId());
+                    chatService.touchAncestorChain(chatId);
                     applicationEventPublisher.publishEvent(new MessageCompletedEvent(
                             memberId,
-                            ctx.chat().getId(),
-                            ctx.turn().getId(),
+                            chatId,
+                            turnId,
                             ctxHolder[0].contextTokens(), answerToken,
                             ctxHolder[0].compressedTurnCount(),
                             fullContent,
@@ -128,15 +130,18 @@ public class MessageStreamingService {
             } catch (CancelException e) {
                 String partialContent = streamCtx.contentBuffer().toString();
                 Integer partialToken = partialContent.isEmpty() ? null : partialContent.split("\\s+").length;
+                Long cancelMemberId = ctx.memberId();
+                Long cancelChatId = ctx.chat().getId();
+                Long cancelTurnId = ctx.turn().getId();
 
                 transactionTemplate.executeWithoutResult(status -> {
-                    Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
+                    Chat chat = chatRepository.findById(cancelChatId).orElseThrow();
                     chat.touchUpdatedAt();
                     if (ctxHolder[0] != null) {
                         applicationEventPublisher.publishEvent(new MessageCompletedEvent(
-                                ctx.chat().getMember().getId(),
-                                ctx.chat().getId(),
-                                ctx.turn().getId(),
+                                cancelMemberId,
+                                cancelChatId,
+                                cancelTurnId,
                                 ctxHolder[0].contextTokens(),
                                 partialToken != null ? partialToken : 0,
                                 ctxHolder[0].compressedTurnCount(),
@@ -158,6 +163,9 @@ public class MessageStreamingService {
                 sendDoneAndComplete(emitter);
             } catch (Exception e) {
                 log.error("SSE 스트리밍 실패", e);
+                Long errorMemberId = ctx.memberId();
+                Long errorChatId = ctx.chat().getId();
+                Long errorTurnId = ctx.turn().getId();
                 try {
                     transactionTemplate.executeWithoutResult(status -> {
                         Message message = messageRepository.findById(aiMessageId).orElseThrow();
@@ -165,13 +173,13 @@ public class MessageStreamingService {
                         if (shouldMarkFailed) {
                             message.updateStatus(MessageStatus.FAILED);
                         }
-                        Chat chat = chatRepository.findById(ctx.chat().getId()).orElseThrow();
+                        Chat chat = chatRepository.findById(errorChatId).orElseThrow();
                         chat.touchUpdatedAt();
                         if (shouldMarkFailed && ctxHolder[0] != null) {
                             applicationEventPublisher.publishEvent(new MessageCompletedEvent(
-                                    ctx.chat().getMember().getId(),
-                                    ctx.chat().getId(),
-                                    ctx.turn().getId(),
+                                    errorMemberId,
+                                    errorChatId,
+                                    errorTurnId,
                                     ctxHolder[0].contextTokens(),
                                     0,
                                     ctxHolder[0].compressedTurnCount(),

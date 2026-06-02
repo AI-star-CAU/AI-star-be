@@ -65,7 +65,7 @@ public class MessageService {
                 .build();
         messageRepository.save(aiMessage);
 
-        return new TurnContext(chat, turn, userMessage, aiMessage);
+        return new TurnContext(memberId, chat, turn, userMessage, aiMessage);
     }
 
     // ── SSE 스트리밍 ──
@@ -177,7 +177,7 @@ public class MessageService {
         message.updateAnswerToken(null);
         message.updateStatus(MessageStatus.STREAMING);
 
-        return new TurnContext(chat, targetTurn, userMessage, message);
+        return new TurnContext(memberId, chat, targetTurn, userMessage, message);
     }
 
     // ── 메시지 수정 (§4.2) ──
@@ -251,7 +251,7 @@ public class MessageService {
                 .titleStatus(branch.getTitleStatus())
                 .build();
 
-        return new TurnContext(branch, newTurn, newUserMessage, newAiMessage, branchCreated);
+        return new TurnContext(sourceChat.getMember().getId(), branch, newTurn, newUserMessage, newAiMessage, branchCreated);
     }
 
     // ── 분기점 결정 (§4.1.1) ──
@@ -274,10 +274,10 @@ public class MessageService {
         throw new ProjectException(ErrorStatus.MESSAGE_ACTION_NOT_ALLOWED);
     }
 
-    public record TurnContext(Chat chat, Turn turn, Message userMessage, Message aiMessage,
+    public record TurnContext(Long memberId, Chat chat, Turn turn, Message userMessage, Message aiMessage,
                                MessageResDto.BranchCreated branchCreated) {
-        TurnContext(Chat chat, Turn turn, Message userMessage, Message aiMessage) {
-            this(chat, turn, userMessage, aiMessage, null);
+        TurnContext(Long memberId, Chat chat, Turn turn, Message userMessage, Message aiMessage) {
+            this(memberId, chat, turn, userMessage, aiMessage, null);
         }
     }
 }

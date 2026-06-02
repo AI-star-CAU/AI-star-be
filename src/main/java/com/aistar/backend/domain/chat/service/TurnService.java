@@ -17,6 +17,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -37,30 +40,40 @@ public class TurnService {
             throw new ProjectException(ErrorStatus.FORBIDDEN);
         }
 
-        // limit + 1 조회해서 hasMore 판단
+        // 2-query 전략: ID만 페이지네이션 → fetch join (HHH90003004 방지)
         PageRequest pageRequest = PageRequest.of(0, limit + 1);
-        List<Turn> turns;
+        List<Long> turnIds;
 
         if (direction == CursorDirection.FORWARD) {
             if (lastTurnSequence == null) {
-                turns = List.of();
+                turnIds = List.of();
             } else {
-                turns = turnRepository.findByChatIdAndTurnSequenceGreaterThanWithMessages(
+                turnIds = turnRepository.findIdsByChatIdAndTurnSequenceGreaterThan(
                         chatId, lastTurnSequence, pageRequest);
             }
         } else {
             // BACKWARD
             if (lastTurnSequence == null) {
-                turns = turnRepository.findByChatIdWithMessages(chatId, pageRequest);
+                turnIds = turnRepository.findIdsByChatId(chatId, pageRequest);
             } else {
-                turns = turnRepository.findByChatIdAndTurnSequenceLessThanWithMessages(
+                turnIds = turnRepository.findIdsByChatIdAndTurnSequenceLessThan(
                         chatId, lastTurnSequence, pageRequest);
             }
         }
 
-        boolean hasMore = turns.size() > limit;
+        boolean hasMore = turnIds.size() > limit;
         if (hasMore) {
-            turns = turns.subList(0, limit);
+            turnIds = turnIds.subList(0, limit);
+        }
+
+        // ID 목록으로 fetch join 후, 원래 순서(turnIds) 유지
+        List<Turn> turns;
+        if (turnIds.isEmpty()) {
+            turns = List.of();
+        } else {
+            Map<Long, Turn> turnMap = turnRepository.findAllWithMessagesByIdIn(turnIds)
+                    .stream().collect(Collectors.toMap(Turn::getId, t -> t));
+            turns = turnIds.stream().map(turnMap::get).filter(Objects::nonNull).toList();
         }
 
         // BACKWARD: DB에서 DESC로 가져왔으므로 ASC로 뒤집어서 응답

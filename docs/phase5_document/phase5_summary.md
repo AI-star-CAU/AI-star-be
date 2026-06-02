@@ -246,6 +246,48 @@ Phase 4 코드의 구조 개선 리팩토링(`refactor/phase4-design-plan` 브�
 
 ---
 
+### 2.8 쿼리 최적화 — N+1 및 HHH90003004 해소
+
+SQL 로그 분석에서 확인된 과다 쿼리 문제 4건을 수정하였다.
+
+#### 2.8.1 touchAncestorChain 배치화
+
+`ChatService.touchAncestorChain()`이 parent를 따라가며 **depth만큼 SELECT를 반복**하는 N+1 패턴이었다. `findAllByRootChatId()`로 트리 전체를 1회 조회 후 메모리에서 parent 탐색하도록 변경.
+
+| 변경 전 | 변경 후 |
+|---|---|
+| depth N → N회 SELECT | rootChatId 기준 1회 SELECT |
+
+#### 2.8.2 ContextAssembler.buildAncestorChain 배치화
+
+`ContextAssembler.buildAncestorChain()`도 동일한 N+1 루프 패턴이었다. 같은 방식으로 `findAllByRootChatId()` 1회 조회 + 메모리 탐색으로 변경.
+
+#### 2.8.3 MessageStreamingService 불필요한 재조회 제거
+
+SSE 스트리밍 완료/취소/에러 트랜잭션에서 `ctx.chat().getMember().getId()` 호출 시 lazy loading으로 Member SELECT가 발생했다. `TurnContext`에 `memberId` 필드를 추가하여 트랜잭션 생성 시점에 미리 저장하고, virtual thread 내에서는 ID만 참조하도록 변경.
+
+#### 2.8.4 TurnRepository 2-query 전략 (HHH90003004 해소)
+
+`LEFT JOIN FETCH t.messages` + `Pageable` 조합으로 **Hibernate가 전체 데이터를 메모리에 올린 후 Java에서 페이지네이션**하는 문제(HHH90003004 경고)가 있었다. 2-query 전략으로 변경:
+
+1. ID만 페이지네이션: `findIdsByChatId*()` → Pageable 적용
+2. fetch join: `findAllWithMessagesByIdIn(ids)` → Pageable 없이 IN 절로 조회
+
+기존 `findByChatIdWithMessages`, `findByChatIdAndTurnSequenceLessThanWithMessages`, `findByChatIdAndTurnSequenceGreaterThanWithMessages` 3개 메서드를 제거하고 4개 메서드(`findIdsByChatId`, `findIdsByChatIdAndTurnSequenceLessThan`, `findIdsByChatIdAndTurnSequenceGreaterThan`, `findAllWithMessagesByIdIn`)로 대체.
+
+**수정 파일:**
+
+| 파일 | 변경 내용 |
+|---|---|
+| `domain/chat/service/ChatService.java` | `touchAncestorChain()` 배치 조회로 변경 |
+| `domain/chat/service/ContextAssembler.java` | `buildAncestorChain()` 배치 조회로 변경 |
+| `domain/chat/service/MessageStreamingService.java` | lazy loading 제거, ID 사전 추출 |
+| `domain/chat/service/MessageService.java` | `TurnContext`에 `memberId` 필드 추가 |
+| `domain/chat/service/TurnService.java` | 2-query 전략 적용 |
+| `domain/chat/repository/TurnRepository.java` | ID 페이지네이션 + fetch join 메서드 분리 |
+
+---
+
 ## 5. 검증
 
 - 빌드 성공
@@ -253,3 +295,4 @@ Phase 4 코드의 구조 개선 리팩토링(`refactor/phase4-design-plan` 브�
 - 동작 변경: 요약/제목이 AI 서버를 통해 실제 생성됨 (기존: 단순 substring)
 - 하위 호환: 프론트엔드 수정 없이 기존 API 계약 유지
 - 구조 개선: MessageService 책임 분리, 이벤트 기반 후처리, ISP 준수
+- 쿼리 최적화: N+1 루프 제거, HHH90003004 경고 해소

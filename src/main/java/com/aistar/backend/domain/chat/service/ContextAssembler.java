@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -129,11 +130,15 @@ public class ContextAssembler {
     }
 
     private List<Chat> buildAncestorChain(Chat targetChat) {
+        // rootChatId 기준으로 트리 전체를 1회 조회 후 메모리에서 parent 탐색
+        Map<Long, Chat> chatMap = chatRepository.findAllByRootChatId(targetChat.getRootChatId())
+                .stream().collect(Collectors.toMap(Chat::getId, c -> c));
+
         List<Chat> chain = new ArrayList<>();
         chain.add(targetChat);
         Long parentId = targetChat.getParentId();
         while (parentId != null) {
-            Chat parent = chatRepository.findById(parentId).orElse(null);
+            Chat parent = chatMap.get(parentId);
             if (parent == null) break;
             chain.add(parent);
             parentId = parent.getParentId();
