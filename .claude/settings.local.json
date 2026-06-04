@@ -5,7 +5,12 @@
       "Bash(./gradlew bootRun)",
       "Bash(curl -s http://localhost:8080/api/v1/api-docs)",
       "Bash(taskkill //F //IM java.exe)",
-      "Bash(curl -s http://localhost:8080/api/v1/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"test@example.com\",\"password\":\"password123\"}')"
+      "Bash(curl -s http://localhost:8080/api/v1/auth/login -H \"Content-Type: application/json\" -d '{\"email\":\"test@example.com\",\"password\":\"password123\"}')",
+      "Bash(./gradlew build:*)",
+      "Bash(./gradlew test:*)",
+      "Bash(python3 -c ':*)",
+      "Bash(wc:*)",
+      "Bash(grep -v \"^//\")"
     ]
   }
 }
