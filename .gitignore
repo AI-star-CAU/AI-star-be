@@ -62,17 +62,8 @@ out/
 ### VS Code ###
 .vscode/
 
+application.yml
+
+##others##
 .env
-.venv/
-oracleJdk-*/
-ai-test.json
-
-*.xlsx
-
-.tmp_pdf_tools/
-.tmp_pdf_wheels/
-
-.agents/
-.claude/
-.claude/skills/
-skills-lock.json
+CLAUDE.md

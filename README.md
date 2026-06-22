@@ -48,14 +48,10 @@ java -jar build/libs/ai-star-server.jar
   DB_USER=사용자명
   DB_PW=db 비번
   DB_URL=db url
-  AI_SERVER_BASE_URL=https://ait.hanbin5.com
-  AISTAR_AI_API_KEY=AI 서버 API key
-  CF_ACCESS_CLIENT_ID=Cloudflare Access Client ID
-  CF_ACCESS_CLIENT_SECRET=Cloudflare Access Client Secret
 ```
-
+![img_1.png](img_1.png)
 - 실행 -> 구성 편집
-- 환경 변수를 띄운 다음 옆에 폴더 모양을 눌러 .env 파일을 설정
+-  환경 변수를 띄운 다음 옆에 폴더 모양을 눌러 .env 파일을 설정![img.png](img.png)
 
 
 - DB에 들어가 ```CREATE DATABASE AIT``` 실행
