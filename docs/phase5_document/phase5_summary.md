@@ -1,0 +1,298 @@
+# Phase 5 구현 요약
+
+## 1. 개요
+
+Phase 4(탐색기, 맥락 조립/압축, 사용량 추적)까지의 기능을 기반으로, 발표 전 MVP 완성도를 높이기 위한 **리팩터링**과 **누락 기능 구현**을 진행하였다.
+
+주요 변경:
+- `ai/` 패키지를 `domain/llm/`으로 통합하여 도메인형 패키지 구조 일관성 확보
+- 로컬 LLM 전환에 따른 모델/제공자 구조 개선
+- AI 서버를 활용한 실제 요약(Summary) 생성
+- 비동기 제목 자동 생성 구현
+- Phase 4 구조 리팩토링(MessageService 분해, 이벤트 기반 후처리, AiServerClient ISP 분리, GraphService 분해, enum 위치 정리) 통합
+
+---
+
+## 2. 변경 내역
+
+### 2.1 패키지 리팩터링 — ai/ → domain/llm/
+
+기존에 AI 서버 통합 코드가 `com.aistar.backend.ai` 패키지에 독립적으로 존재하여, `domain/` 하위의 도메인형 패키지 구조와 일관성이 없었다. 이를 `domain/llm/` 아래로 통합했다.
+
+**이동 내역:**
+
+| 이전 위치 | 이후 위치 |
+|---|---|
+| `ai/AiServerClient.java` | `domain/llm/client/AiServerClient.java` |
+| `ai/AiServerWebClient.java` | `domain/llm/client/AiServerWebClient.java` |
+| `ai/AiServerException.java` | `domain/llm/client/AiServerException.java` |
+| `ai/AiServerConfig.java` | `domain/llm/config/AiServerConfig.java` |
+| `ai/AiServerProperties.java` | `domain/llm/config/AiServerProperties.java` |
+| `ai/dto/*.java` (7개) | `domain/llm/dto/*.java` |
+
+**삭제:** Phase 2의 `LlmClient` 인터페이스와 `MockLlmClient`는 `AiServerClient`로 대체되어 삭제.
+
+**영향 범위:** `MessageService`, `HealthController`의 import 경로 변경. 동작 변경 없음.
+
+### 2.2 로컬 LLM 기본 지원
+
+외부 AI API(OpenAI, Google, Anthropic)가 아닌 로컬 LLM을 사용하는 방향으로 전환됨에 따라, 모델/제공자 구조를 개선했다.
+
+**변경 내용:**
+
+- `LlmProvider`에 `LOCAL` 추가
+- `LlmModel`에 `LOCAL_DEFAULT` 추가 (contextWindow: 128,000)
+- 채팅 생성 시 `llmProvider`/`llmModel` 미지정이면 자동으로 `LOCAL` / `LOCAL_DEFAULT` 적용
+- 기존 외부 모델(OPENAI, GOOGLE, ANTHROPIC)은 enum에 유지하여 추후 확장 가능
+
+**ChatReqDto.Create 변경:**
+
+채팅 생성 요청에서 `llmProvider`/`llmModel`이 선택 사항으로 변경됐다.
+- 미지정 시 → `LOCAL` / `LOCAL_DEFAULT` 자동 적용
+- 명시적 지정 시 → 지정된 값 사용
+- 기존 프론트엔드 코드와 호환됨 (보내든 안 보내든 동작)
+
+### 2.3 contextWindow 프로퍼티 기반 전환
+
+맥락 압축 임계값 계산 시 `LlmModel.contextWindow`에 의존하던 구조를 `application.yml` 프로퍼티로 변경했다. 로컬 LLM 환경에서 모델 enum에 종속되지 않고 설정으로 관리할 수 있다.
+
+**변경 전:** `ContextAssembler`가 `LlmModel.getContextWindow()`를 직접 참조
+**변경 후:** `AiServerProperties.contextWindow()`를 주입받아 사용
+
+```yaml
+# application.yml
+ai:
+  server:
+    context-window: 128000
+```
+
+### 2.4 AI 요약(Summary) 실제 호출
+
+Phase 3~4에서 `generateSummaryAsync()`가 단순히 응답의 앞 50자를 잘라서 저장하던 것을, 실제 AI 서버에 요약을 요청하도록 변경했다.
+
+**동작 흐름:**
+1. 메시지 스트리밍 완료 후 비동기로 `aiServerClient.generateSummary()` 호출
+2. AI 서버가 대화 내용을 50자 이내 한국어로 요약하여 반환
+3. 요약 결과를 `turn.summary`에 저장
+
+**AI 서버 실패 시:** 기존과 동일하게 응답 앞 50자를 fallback으로 저장. 요약이 아예 없는 상태는 발생하지 않음.
+
+### 2.5 비동기 제목 자동 생성
+
+채팅/분기 생성 시 제목을 지정하지 않으면 `titleStatus = PENDING`으로 남는데, 이전까지는 제목이 자동 생성되지 않았다. 이제 메시지 완료 시 제목이 PENDING이면 AI 서버에 제목 생성을 요청한다.
+
+**동작 흐름:**
+1. 메시지 스트리밍 완료 후 `titleStatus == PENDING` 확인
+2. 사용자 질문 + AI 응답을 context로 전달하여 `aiServerClient.generateBranchTitle()` 호출
+3. AI 서버가 20자 이내 한국어 제목을 생성하여 반환
+4. `titleStatus`를 `GENERATED`로 변경하고 제목 저장
+
+**AI 서버 실패 시:** 사용자 질문의 앞 20자를 fallback 제목으로 사용.
+
+**안전 장치:**
+- 저장 시점에 `titleStatus == PENDING` 재확인 → 사용자가 이미 수동 편집한 경우 덮어쓰지 않음
+- `turnSequence` 제한 없음 → 첫 메시지가 실패/취소되어도 이후 메시지 성공 시 제목 생성
+
+**프론트엔드 연동:**
+- `useConversations` — Explorer에서 PENDING 노드 존재 시 3초 polling
+- `useGraph` — 그래프에서 PENDING title/summary 존재 시 3초 polling
+- `useChatTitle` — PENDING이면 "제목 생성 중…" 표시, GENERATED 시 실제 제목 반영
+- 모든 PENDING 해소 시 polling 자동 중지
+
+### 2.6 AI 서버 응답 토큰 확대
+
+`max_new_tokens`을 512 → 1024로 변경하여 AI 서버가 더 긴 응답을 생성할 수 있도록 했다.
+
+### 2.7 Phase 4 구조 리팩토링 통합
+
+Phase 4 코드의 구조 개선 리팩토링(`refactor/phase4-design-plan` 브랜치)을 Phase 5에 통합했다. API 동작 변경 없이 내부 책임 분리와 유지보수성을 개선하는 리팩토링이다.
+
+#### 2.7.1 MessageService 분해
+
+기존 `MessageService`가 Turn/Message 생성, SSE 스트리밍, 취소 상태 관리, summary 생성, usage 누적을 모두 담당하던 것을 분리했다.
+
+| 추출된 클래스 | 역할 |
+|---|---|
+| `MessageStreamingService` | SSE emitter 생성, AI 서버 스트림 호출, chunk/done/error 이벤트 전송 |
+| `StreamingRegistry` | AI message id별 스트리밍 상태 저장, cancel 처리, 종료 시 상태 제거 |
+| `TurnSummaryService` | AI 서버 요약 호출 + 제목 자동 생성 (fallback 포함) |
+
+`MessageService`는 Turn/Message 생성, cancel/regenerate/edit 준비만 담당하고 스트리밍은 `MessageStreamingService`에 위임한다.
+
+#### 2.7.2 이벤트 기반 후처리
+
+스트리밍 완료 후 직접 `UsageService`, summary 생성을 호출하던 구조를 Spring 이벤트 기반으로 전환했다.
+
+- `MessageCompletedEvent`: 스트리밍 완료 시 발행 (chatId, turnId, userContent, fullContent, 토큰 정보 포함)
+- `UsageAccumulationListener`: usage 누적 (`@TransactionalEventListener(AFTER_COMMIT)`)
+- `TurnSummaryListener`: 요약 생성 + 제목 자동 생성 트리거 (`@TransactionalEventListener(AFTER_COMMIT)`)
+
+#### 2.7.3 AiServerClient ISP 분리
+
+`AiServerClient`를 5개 세분 인터페이스로 분리하여, 호출자별 필요한 메서드만 주입받을 수 있도록 했다.
+
+| 인터페이스 | 메서드 |
+|---|---|
+| `LlmStreamClient` | `streamChatCompletion()` |
+| `LlmCompletionClient` | `complete()` |
+| `LlmHealthClient` | `isAvailable()` |
+| `LlmSummaryClient` | `generateSummary()` |
+| `LlmBranchTitleClient` | `generateBranchTitle()` |
+
+`AiServerClient`는 5개 인터페이스를 모두 extends하여 하위 호환 유지. `HealthController`는 `LlmHealthClient`에만 의존.
+
+#### 2.7.4 GraphService 분해
+
+그래프 탐색 로직을 역할별로 분리했다.
+
+| 클래스 | 역할 |
+|---|---|
+| `TurnTraverser` | UP/DOWN 방향 탐색, center turn 결정 |
+| `FrontierCalculator` | 더 펼칠 수 있는 노드(frontier) 계산 |
+| `GraphNodeMapper` | 엔티티 → 응답 DTO 변환 |
+
+`GraphService`의 공개 API는 유지하고 내부 위임만 변경했다.
+
+#### 2.7.5 LlmModel/LlmProvider enum 위치 정리
+
+실사용 enum을 `domain.llm.enums`로 이동하고, 기존 `domain.chat.enums`의 enum은 `@Deprecated` 호환 타입으로 유지했다.
+
+- `domain.llm.enums.LlmProvider`: LOCAL, OPENAI, GOOGLE, ANTHROPIC
+- `domain.llm.enums.LlmModel`: LOCAL_DEFAULT, GPT_4O_MINI, GEMINI_2_0_FLASH, CLAUDE_3_5_SONNET
+- 엔티티, DTO, 서비스의 import는 `domain.llm.enums`로 변경
+- JPA `@Enumerated(EnumType.STRING)` 저장값은 변경 없음
+
+---
+
+## 3. 커밋 이력
+
+| 커밋 | 설명 |
+|------|------|
+| `2209985` | ai/ 패키지를 domain/llm/으로 통합 및 테스트 보고서 추가 |
+| `5233279` | LOCAL LLM 기본 지원 및 AI 요약 실제 호출 구현 |
+| `0471fc7` | 첫 턴 완료 시 비동기 AI 제목 자동 생성 |
+| `53b807b` | 제목 생성 조건에서 turnSequence 제한 제거 |
+| `3111bcb` | phase4 리팩토링 구조 개선 (MessageService 분해, 이벤트화, ISP 분리, GraphService 분해, enum 이동) |
+
+---
+
+## 4. 파일 변경 총정리
+
+### 신규 파일
+
+| 파일 | 역할 |
+|---|---|
+| `docs/refactoring/ai_package_to_domain_llm.md` | ai → domain/llm 리팩터링 문서 |
+| `docs/refactoring/phase4_refactoring_plan.md` | Phase 4 리팩토링 계획서 |
+| `docs/refactoring/phase4_refactoring_execution_report.md` | Phase 4 리팩토링 실행 보고서 |
+| `domain/chat/service/MessageStreamingService.java` | SSE 스트리밍 전담 서비스 |
+| `domain/chat/service/StreamingRegistry.java` | 스트리밍 상태 관리 컴포넌트 |
+| `domain/chat/service/TurnSummaryService.java` | AI 요약/제목 생성 서비스 |
+| `domain/chat/event/MessageCompletedEvent.java` | 메시지 완료 이벤트 |
+| `domain/chat/listener/TurnSummaryListener.java` | 요약/제목 생성 이벤트 리스너 |
+| `domain/usage/listener/UsageAccumulationListener.java` | usage 누적 이벤트 리스너 |
+| `domain/llm/client/LlmStreamClient.java` | 스트리밍 인터페이스 |
+| `domain/llm/client/LlmCompletionClient.java` | 완성형 호출 인터페이스 |
+| `domain/llm/client/LlmHealthClient.java` | 헬스체크 인터페이스 |
+| `domain/llm/client/LlmSummaryClient.java` | 요약 생성 인터페이스 |
+| `domain/llm/client/LlmBranchTitleClient.java` | 제목 생성 인터페이스 |
+| `domain/llm/enums/LlmModel.java` | LLM 모델 enum (llm 도메인) |
+| `domain/llm/enums/LlmProvider.java` | LLM 제공자 enum (llm 도메인) |
+| `domain/chat/service/graph/TurnTraverser.java` | 그래프 탐색 |
+| `domain/chat/service/graph/FrontierCalculator.java` | 프론티어 계산 |
+| `domain/chat/service/graph/GraphNodeMapper.java` | 그래프 DTO 변환 |
+| `MessageStreamingRegressionTest.java` | SSE 회귀 테스트 |
+
+### 이동 파일 (12개, ai/ → domain/llm/)
+
+| 이전 | 이후 |
+|---|---|
+| `ai/AiServerClient.java` | `domain/llm/client/AiServerClient.java` |
+| `ai/AiServerWebClient.java` | `domain/llm/client/AiServerWebClient.java` |
+| `ai/AiServerException.java` | `domain/llm/client/AiServerException.java` |
+| `ai/AiServerConfig.java` | `domain/llm/config/AiServerConfig.java` |
+| `ai/AiServerProperties.java` | `domain/llm/config/AiServerProperties.java` |
+| `ai/dto/Ai*.java` (7개) | `domain/llm/dto/Ai*.java` |
+
+### 삭제 파일 (3개)
+
+| 파일 | 사유 |
+|---|---|
+| `domain/llm/client/LlmClient.java` | AiServerClient로 대체 |
+| `domain/llm/client/MockLlmClient.java` | AiServerWebClient로 대체 |
+| `domain/llm/dto/.gitkeep` | DTO 파일 이동으로 불필요 |
+
+### 수정 파일
+
+| 파일 | 변경 내용 |
+|---|---|
+| `domain/chat/entity/Chat.java` | `updateGeneratedTitle()` 추가, import를 `domain.llm.enums`로 변경 |
+| `domain/chat/enums/LlmProvider.java` | `LOCAL` 추가, `@Deprecated` 처리 |
+| `domain/chat/enums/LlmModel.java` | `LOCAL_DEFAULT` 추가, `@Deprecated` 처리 |
+| `domain/chat/dto/ChatReqDto.java` | provider/model 선택 사항 변경, default 메서드 추가, import 변경 |
+| `domain/chat/dto/ChatResDto.java` | import를 `domain.llm.enums`로 변경 |
+| `domain/chat/dto/ExplorerResDto.java` | import를 `domain.llm.enums`로 변경 |
+| `domain/chat/service/ChatService.java` | `llmProviderOrDefault()` / `llmModelOrDefault()` 사용 |
+| `domain/chat/service/ContextAssembler.java` | `AiServerProperties.contextWindow()` 기반으로 변경 |
+| `domain/chat/service/MessageService.java` | 스트리밍을 `MessageStreamingService`에 위임, inline 코드 제거 |
+| `domain/chat/service/GraphService.java` | 내부 로직을 `TurnTraverser`/`FrontierCalculator`/`GraphNodeMapper`에 위임 |
+| `domain/llm/client/AiServerClient.java` | 5개 세분 인터페이스 extends로 변경 |
+| `domain/llm/config/AiServerProperties.java` | `contextWindow` 필드 추가 |
+| `global/config/DataInitializer.java` | LOCAL / LOCAL_DEFAULT 사용, import 변경 |
+| `global/config/HealthController.java` | `LlmHealthClient`에만 의존하도록 변경 |
+| `src/main/resources/application.yml` | `context-window` 프로퍼티 추가 |
+| `src/test/resources/application.yml` | 테스트용 ai.server 프로퍼티 추가 |
+| `Phase2/3/4/5ApiTest.java` | LOCAL / LOCAL_DEFAULT로 변경, import를 `domain.llm.enums`로 변경 |
+
+---
+
+### 2.8 쿼리 최적화 — N+1 및 HHH90003004 해소
+
+SQL 로그 분석에서 확인된 과다 쿼리 문제 4건을 수정하였다.
+
+#### 2.8.1 touchAncestorChain 배치화
+
+`ChatService.touchAncestorChain()`이 parent를 따라가며 **depth만큼 SELECT를 반복**하는 N+1 패턴이었다. `findAllByRootChatId()`로 트리 전체를 1회 조회 후 메모리에서 parent 탐색하도록 변경.
+
+| 변경 전 | 변경 후 |
+|---|---|
+| depth N → N회 SELECT | rootChatId 기준 1회 SELECT |
+
+#### 2.8.2 ContextAssembler.buildAncestorChain 배치화
+
+`ContextAssembler.buildAncestorChain()`도 동일한 N+1 루프 패턴이었다. 같은 방식으로 `findAllByRootChatId()` 1회 조회 + 메모리 탐색으로 변경.
+
+#### 2.8.3 MessageStreamingService 불필요한 재조회 제거
+
+SSE 스트리밍 완료/취소/에러 트랜잭션에서 `ctx.chat().getMember().getId()` 호출 시 lazy loading으로 Member SELECT가 발생했다. `TurnContext`에 `memberId` 필드를 추가하여 트랜잭션 생성 시점에 미리 저장하고, virtual thread 내에서는 ID만 참조하도록 변경.
+
+#### 2.8.4 TurnRepository 2-query 전략 (HHH90003004 해소)
+
+`LEFT JOIN FETCH t.messages` + `Pageable` 조합으로 **Hibernate가 전체 데이터를 메모리에 올린 후 Java에서 페이지네이션**하는 문제(HHH90003004 경고)가 있었다. 2-query 전략으로 변경:
+
+1. ID만 페이지네이션: `findIdsByChatId*()` → Pageable 적용
+2. fetch join: `findAllWithMessagesByIdIn(ids)` → Pageable 없이 IN 절로 조회
+
+기존 `findByChatIdWithMessages`, `findByChatIdAndTurnSequenceLessThanWithMessages`, `findByChatIdAndTurnSequenceGreaterThanWithMessages` 3개 메서드를 제거하고 4개 메서드(`findIdsByChatId`, `findIdsByChatIdAndTurnSequenceLessThan`, `findIdsByChatIdAndTurnSequenceGreaterThan`, `findAllWithMessagesByIdIn`)로 대체.
+
+**수정 파일:**
+
+| 파일 | 변경 내용 |
+|---|---|
+| `domain/chat/service/ChatService.java` | `touchAncestorChain()` 배치 조회로 변경 |
+| `domain/chat/service/ContextAssembler.java` | `buildAncestorChain()` 배치 조회로 변경 |
+| `domain/chat/service/MessageStreamingService.java` | lazy loading 제거, ID 사전 추출 |
+| `domain/chat/service/MessageService.java` | `TurnContext`에 `memberId` 필드 추가 |
+| `domain/chat/service/TurnService.java` | 2-query 전략 적용 |
+| `domain/chat/repository/TurnRepository.java` | ID 페이지네이션 + fetch join 메서드 분리 |
+
+---
+
+## 5. 검증
+
+- 빌드 성공
+- 전체 테스트 통과 (Phase 2: 19개, Phase 3: 24개, Phase 4: 25개, Phase 5: 16개, SSE 회귀: 3개, Application: 1개)
+- 동작 변경: 요약/제목이 AI 서버를 통해 실제 생성됨 (기존: 단순 substring)
+- 하위 호환: 프론트엔드 수정 없이 기존 API 계약 유지
+- 구조 개선: MessageService 책임 분리, 이벤트 기반 후처리, ISP 준수
+- 쿼리 최적화: N+1 루프 제거, HHH90003004 경고 해소

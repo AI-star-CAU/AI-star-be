@@ -19,7 +19,7 @@ cd AI-star-be
 
 ### 2. 서버 실행
 
-#### Mac / Linux 
+#### Mac / Linux
 ```bash
 ./gradlew clean build
 java -jar build/libs/ai-star-server.jar
@@ -31,14 +31,13 @@ gradlew clean build
 java -jar build/libs/ai-star-server.jar
 ```
 
-
 #### IntelliJ를 이용한 실행을 권장
 
 ## 실행 확인
 
-- http://localhost:8080
-- http://localhost:8080/health
-- http://localhost:8080/hello
+- http://localhost:8080/api/v1/health
+- http://localhost:8080/api/v1/swagger-ui
+- http://localhost:8080/api/v1/api-docs
 
 - 3가지 기본 테스트용 엔드포인트 (method: GET)
 
